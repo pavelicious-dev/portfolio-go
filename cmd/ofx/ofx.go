@@ -19,15 +19,27 @@ func main() {
 	database.Connect()
 	defer database.Close()
 
-	trades := importTrades(os.Args[1])
-
-	err := database.ImportTrades(trades)
+	folder := os.Args[1]
+	files, err := os.ReadDir(folder)
 	if err != nil {
 		panic(err)
 	}
+
+	for _, file := range files {
+		if !strings.HasSuffix(file.Name(), ".qfx") {
+			continue
+		}
+		filePath := folder + string(os.PathSeparator) + file.Name()
+		trades := parseTrades(filePath)
+
+		if len(trades) < 1 {
+			continue
+		}
+		database.ImportTrades(trades)
+	}
 }
 
-func importTrades(path string) []models.Trade {
+func parseTrades(path string) []models.Trade {
 	file, err := os.Open(path)
 	if err != nil {
 		panic(err)
@@ -68,6 +80,8 @@ func importTrades(path string) []models.Trade {
 	for _, info := range ofx.INVSTMTMSGSRSV1.INVSTMTTRNRS.INVSTMTRS.INVTRANLIST.SELLOPT {
 		trades = append(trades, parseOptionTrade(info.INVSELL, info.SHPERCTRCT, options))
 	}
+
+	fmt.Printf("parsed %d trades from file %s\n", len(trades), path)
 
 	return trades
 }

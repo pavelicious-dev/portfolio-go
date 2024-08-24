@@ -12,7 +12,7 @@ type Trade struct {
 	Asset         string
 	Date          time.Time
 	Units         float64
-	UnitPrice     float64
+	UnitPrice     float64 `bson:"unitPrice"`
 	Commission    float64
 	Total         float64
 	ExchangeRate  float64 `bson:"exchangeRate"`
