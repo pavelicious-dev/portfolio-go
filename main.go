@@ -1,10 +1,7 @@
 package main
 
 import (
-	"fmt"
 	"portfolio/database"
-	"portfolio/models"
-	"strings"
 
 	"github.com/gofiber/fiber/v3"
 	"github.com/gofiber/fiber/v3/log"
@@ -19,24 +16,23 @@ func main() {
 
 	app := fiber.New()
 
-	app.Get("/trades/:symbol", func(c fiber.Ctx) error {
-		symbol := strings.ToUpper(c.Params("symbol"))
+	app.Get("/trades", func(c fiber.Ctx) error {
+		trades, err := database.GetTrades(database.TradeQuery{
+			Symbol: c.Query("symbol"),
+			Year:   c.Query("year"),
+			Month:  c.Query("month"),
+		})
 
-		trades, err := database.GetTrades(symbol)
 		if err != nil {
 			log.Error(err)
 			return c.SendStatus(fiber.StatusBadRequest)
 		}
+		return c.JSON(trades)
+	})
 
-		filtered := []models.Trade{}
-		for _, trade := range trades {
-			if trade.IsOptionTrade {
-				fmt.Println(trade.GetOptionInfo())
-				filtered = append(filtered, trade)
-			}
-		}
+	app.Get("/trades/:year/:month", func(c fiber.Ctx) error {
 
-		return c.JSON(filtered)
+		return nil
 	})
 
 	log.Fatal(app.Listen(":3000"))

@@ -4,14 +4,47 @@ import (
 	"context"
 	"fmt"
 	"portfolio/models"
+	"strconv"
+	"strings"
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
-func GetTrades(symbol string) ([]models.Trade, error) {
-	filter := bson.M{"asset": bson.M{"$regex": "^" + symbol}}
+type TradeQuery struct {
+	Symbol string
+	Year   string
+	Month  string
+}
+
+func GetTrades(query TradeQuery) ([]models.Trade, error) {
+	filter := bson.M{}
+
+	if query.Symbol != "" {
+		filter["asset"] = bson.M{"$regex": "^" + strings.ToUpper(query.Symbol)}
+	}
+
+	dateQuery := bson.A{}
+
+	if query.Year != "" {
+		year, err := strconv.ParseInt(query.Year, 10, 32)
+		if err == nil {
+			dateQuery = append(dateQuery, bson.M{"$expr": bson.M{"$eq": bson.A{bson.M{"$year": "$date"}, year}}})
+		}
+	}
+
+	if query.Month != "" {
+		month, err := strconv.ParseInt(query.Month, 10, 32)
+		if err == nil {
+			dateQuery = append(dateQuery, bson.M{"$expr": bson.M{"$eq": bson.A{bson.M{"$month": "$date"}, month}}})
+		}
+	}
+
+	if len(dateQuery) > 0 {
+		filter["$and"] = dateQuery
+	}
+
 	opts := options.Find().SetSort(bson.D{{Key: "date", Value: 1}})
 	res, err := GetDB().Collection("trades").Find(context.Background(), filter, opts)
 
