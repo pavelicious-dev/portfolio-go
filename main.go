@@ -2,6 +2,7 @@ package main
 
 import (
 	"portfolio/database"
+	"portfolio/services"
 
 	"github.com/gofiber/fiber/v3"
 	"github.com/gofiber/fiber/v3/log"
@@ -30,9 +31,21 @@ func main() {
 		return c.JSON(trades)
 	})
 
-	app.Get("/trades/:year/:month", func(c fiber.Ctx) error {
+	app.Get("/positions", func(c fiber.Ctx) error {
+		trades, err := database.GetTrades(database.TradeQuery{
+			Symbol: c.Query("symbol"),
+			Year:   c.Query("year"),
+			Month:  c.Query("month"),
+		})
 
-		return nil
+		if err != nil {
+			log.Error(err)
+			return c.SendStatus(fiber.StatusBadRequest)
+		}
+
+		positions := services.GetPositions(trades)
+
+		return c.JSON(positions)
 	})
 
 	log.Fatal(app.Listen(":3000"))
