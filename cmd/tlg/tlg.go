@@ -101,18 +101,19 @@ func importTrades(path string) {
 	})
 
 	for _, file := range files {
-		if strings.HasSuffix(file.Name(), ".tlg") {
-			trades, _ := ParseTlgFile(path + string(os.PathSeparator) + file.Name())
-			fmt.Printf("%s (%d trades)", file.Name(), len(trades))
-
-			tradeDocs := make([]interface{}, len(trades))
-			for i, trade := range trades {
-				tradeDocs[i] = trade
-			}
-
-			opt := options.InsertManyOptions{}
-			res, _ := collection.InsertMany(context.Background(), tradeDocs, opt.SetOrdered(false))
-			fmt.Printf(" - inserted %d new trades\n", len(res.InsertedIDs))
+		if !strings.HasSuffix(file.Name(), ".tlg") {
+			continue
 		}
+		trades, _ := ParseTlgFile(path + string(os.PathSeparator) + file.Name())
+		fmt.Printf("%s (%d trades)", file.Name(), len(trades))
+
+		tradeDocs := make([]interface{}, len(trades))
+		for i, trade := range trades {
+			tradeDocs[i] = trade
+		}
+
+		opt := options.InsertManyOptions{}
+		res, _ := collection.InsertMany(context.Background(), tradeDocs, opt.SetOrdered(false))
+		fmt.Printf(" - inserted %d new trades\n", len(res.InsertedIDs))
 	}
 }

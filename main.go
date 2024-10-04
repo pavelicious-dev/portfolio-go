@@ -2,7 +2,7 @@ package main
 
 import (
 	"portfolio/database"
-	"portfolio/services"
+	"portfolio/services/positions"
 
 	"github.com/gofiber/fiber/v3"
 	"github.com/gofiber/fiber/v3/log"
@@ -43,7 +43,7 @@ func main() {
 			return c.SendStatus(fiber.StatusBadRequest)
 		}
 
-		positions := services.GetPositions(trades)
+		positions, _ := positions.GetPositions(trades)
 
 		return c.JSON(positions)
 	})
