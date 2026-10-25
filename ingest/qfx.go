@@ -30,9 +30,9 @@ func ParseQFX(r io.Reader) (*QFXFile, error) {
 	list := stmt.INVTRANLIST
 	secs := doc.SECLISTMSGSRSV1.SECLIST
 
-	stocks := make(map[string]string)
+	stocks := make(map[string]secInfo)
 	for _, s := range secs.STOCKINFO {
-		stocks[s.SECINFO.SECID.UNIQUEID] = s.SECINFO.TICKER
+		stocks[s.SECINFO.SECID.UNIQUEID] = s.SECINFO
 	}
 	options := make(map[string]optInfo)
 	for _, o := range secs.OPTINFO {
@@ -44,7 +44,7 @@ func ParseQFX(r io.Reader) (*QFXFile, error) {
 		return nil, fmt.Errorf("no ACCTID found")
 	}
 
-	add := func(info invInfo, sign int64, instrument func(currency string) (models.Instrument, error)) error {
+	add := func(info invInfo, sign int64, tradeType string, instrument func(currency string) (models.Instrument, error)) error {
 		currency, rate := info.currency(stmt.CURDEF)
 		in, err := instrument(currency)
 		if err != nil {
@@ -59,6 +59,7 @@ func ParseQFX(r io.Reader) (*QFXFile, error) {
 			Source:     "qfx",
 			SourceID:   info.INVTRAN.FITID,
 			Kind:       models.KindTrade,
+			Effect:     effectOf(tradeType),
 			TradedAt:   tradedAt,
 			// OFX reports sells with negative units; don't rely on it
 			Quantity:   models.Fixed(sign) * models.FixedFromFloat(info.UNITS).Abs(),
@@ -71,11 +72,12 @@ func ParseQFX(r io.Reader) (*QFXFile, error) {
 
 	stockInstrument := func(info invInfo) func(string) (models.Instrument, error) {
 		return func(currency string) (models.Instrument, error) {
-			ticker := stocks[info.SecID.UNIQUEID]
+			sec := stocks[info.SecID.UNIQUEID]
+			ticker := sec.TICKER
 			if ticker == "" {
 				return models.Instrument{}, fmt.Errorf("unknown security %q", info.SecID.UNIQUEID)
 			}
-			return models.Instrument{Type: models.Stock, Symbol: ticker, Underlying: ticker, Currency: currency, Multiplier: 1}, nil
+			return models.Instrument{ConID: sec.conid(), Type: models.Stock, Symbol: ticker, Underlying: ticker, Currency: currency, Multiplier: 1}, nil
 		}
 	}
 	optionInstrument := func(info invInfo, perContract int64) func(string) (models.Instrument, error) {
@@ -92,22 +94,22 @@ func ParseQFX(r io.Reader) (*QFXFile, error) {
 	}
 
 	for _, b := range list.BUYSTOCK {
-		if err := add(b.INVBUY, 1, stockInstrument(b.INVBUY)); err != nil {
+		if err := add(b.INVBUY, 1, b.BUYTYPE, stockInstrument(b.INVBUY)); err != nil {
 			return nil, err
 		}
 	}
 	for _, s := range list.SELLSTOCK {
-		if err := add(s.INVSELL, -1, stockInstrument(s.INVSELL)); err != nil {
+		if err := add(s.INVSELL, -1, s.SELLTYPE, stockInstrument(s.INVSELL)); err != nil {
 			return nil, err
 		}
 	}
 	for _, b := range list.BUYOPT {
-		if err := add(b.INVBUY, 1, optionInstrument(b.INVBUY, b.SHPERCTRCT)); err != nil {
+		if err := add(b.INVBUY, 1, b.OPTBUYTYPE, optionInstrument(b.INVBUY, b.SHPERCTRCT)); err != nil {
 			return nil, err
 		}
 	}
 	for _, s := range list.SELLOPT {
-		if err := add(s.INVSELL, -1, optionInstrument(s.INVSELL, s.SHPERCTRCT)); err != nil {
+		if err := add(s.INVSELL, -1, s.OPTSELLTYPE, optionInstrument(s.INVSELL, s.SHPERCTRCT)); err != nil {
 			return nil, err
 		}
 	}
@@ -140,6 +142,7 @@ func (o optInfo) instrument(currency string, perContract int64) (models.Instrume
 	strike := models.FixedFromFloat(o.STRIKEPRICE)
 
 	return models.Instrument{
+		ConID:      o.SECINFO.conid(),
 		Type:       models.Option,
 		Symbol:     models.OCCSymbol(underlying, expiry, right, strike),
 		Underlying: underlying,
@@ -200,18 +203,22 @@ type invStmt struct {
 	}
 	INVTRANLIST struct {
 		BUYSTOCK []struct {
-			INVBUY invInfo
+			INVBUY  invInfo
+			BUYTYPE string
 		}
 		SELLSTOCK []struct {
-			INVSELL invInfo
+			INVSELL  invInfo
+			SELLTYPE string
 		}
 		BUYOPT []struct {
 			INVBUY     invInfo
+			OPTBUYTYPE string
 			SHPERCTRCT int64
 		}
 		SELLOPT []struct {
-			INVSELL    invInfo
-			SHPERCTRCT int64
+			INVSELL     invInfo
+			OPTSELLTYPE string
+			SHPERCTRCT  int64
 		}
 	}
 }
@@ -228,6 +235,7 @@ type secInfo struct {
 	SECID   secID `xml:"SECID"`
 	SECNAME string
 	TICKER  string
+	FIID    string
 }
 
 type secID struct {
@@ -253,4 +261,26 @@ type invInfo struct {
 // the account's base currency while prices are in the trade currency.
 func (i invInfo) commission(rate float64) float64 {
 	return math.Abs(i.COMMISSION) / rate
+}
+
+// effectOf maps an OFX buy/sell type (BUYTOOPEN, SELLTOCLOSE, BUYTOCOVER,
+// SELLSHORT, ...) to the open/close flag; plain BUY and SELL carry none.
+func effectOf(tradeType string) models.Effect {
+	t := strings.ToUpper(tradeType)
+	switch {
+	case strings.Contains(t, "CLOSE"), strings.Contains(t, "COVER"):
+		return models.EffectClose
+	case strings.Contains(t, "OPEN"), strings.Contains(t, "SHORT"):
+		return models.EffectOpen
+	}
+	return ""
+}
+
+// conid is the broker's contract id, which stays the same when the ticker or
+// strike of a contract is adjusted for corporate actions.
+func (s secInfo) conid() string {
+	if s.FIID != "" {
+		return strings.TrimSpace(s.FIID)
+	}
+	return ""
 }

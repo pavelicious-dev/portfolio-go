@@ -2,6 +2,14 @@ package models
 
 import "time"
 
+// Effect is the broker's open/close flag for a trade; empty if not reported.
+type Effect string
+
+const (
+	EffectOpen  Effect = "OPEN"
+	EffectClose Effect = "CLOSE"
+)
+
 type TradeKind string
 
 const (
@@ -19,6 +27,7 @@ type Trade struct {
 	Source     string     `json:"source"`   // import format, "qfx"
 	SourceID   string     `json:"sourceId"` // broker transaction id, unique per account
 	Kind       TradeKind  `json:"kind"`
+	Effect     Effect     `json:"effect,omitempty"`
 	TradedAt   time.Time  `json:"tradedAt"`
 	Quantity   Fixed      `json:"quantity"`   // signed: buy > 0, sell < 0
 	Price      Fixed      `json:"price"`      // per unit, in instrument currency
@@ -40,4 +49,12 @@ func (t Trade) CashBase() float64 {
 		return t.Cash().Float()
 	}
 	return t.Cash().Float() * t.FxToBase
+}
+
+// Rate is the conversion rate to the base currency, 1 if unknown.
+func (t Trade) Rate() float64 {
+	if t.FxToBase <= 0 {
+		return 1
+	}
+	return t.FxToBase
 }

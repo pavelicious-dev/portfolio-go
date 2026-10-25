@@ -25,6 +25,7 @@ const (
 // Instrument is a tradable contract. Option fields are zero for other types.
 type Instrument struct {
 	ID         int64          `json:"id"`
+	ConID      string         `json:"conid,omitempty"` // broker contract id, stable across ticker changes
 	Type       InstrumentType `json:"type"`
 	Symbol     string         `json:"symbol"` // unique per type+currency; OCC symbol for options
 	Underlying string         `json:"underlying"`

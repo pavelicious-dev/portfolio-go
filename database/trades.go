@@ -2,6 +2,8 @@ package database
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -33,9 +35,9 @@ func (db *DB) GetTrades(ctx context.Context, q TradeQuery) ([]models.Trade, erro
 	}
 
 	query := `
-SELECT t.id, t.account_id, t.source, t.source_id, t.kind, t.traded_at,
+SELECT t.id, t.account_id, t.source, t.source_id, t.kind, t.effect, t.traded_at,
        t.quantity, t.price, t.commission, t.fx_to_base,
-       i.id, i.type, i.symbol, i.underlying, i.currency, i.multiplier, i.expiry, i.strike, i.right
+       i.id, i.conid, i.type, i.symbol, i.underlying, i.currency, i.multiplier, i.expiry, i.strike, i.right
 FROM trades t JOIN instruments i ON i.id = t.instrument_id`
 	if len(where) > 0 {
 		query += " WHERE " + strings.Join(where, " AND ")
@@ -54,9 +56,9 @@ FROM trades t JOIN instruments i ON i.id = t.instrument_id`
 		var tradedAt, expiry string
 		var qty, price, commission, strike int64
 
-		err := rows.Scan(&t.ID, &t.AccountID, &t.Source, &t.SourceID, &t.Kind, &tradedAt,
+		err := rows.Scan(&t.ID, &t.AccountID, &t.Source, &t.SourceID, &t.Kind, &t.Effect, &tradedAt,
 			&qty, &price, &commission, &t.FxToBase,
-			&t.Instrument.ID, &t.Instrument.Type, &t.Instrument.Symbol, &t.Instrument.Underlying,
+			&t.Instrument.ID, &t.Instrument.ConID, &t.Instrument.Type, &t.Instrument.Symbol, &t.Instrument.Underlying,
 			&t.Instrument.Currency, &t.Instrument.Multiplier, &expiry, &strike, &t.Instrument.Right)
 		if err != nil {
 			return nil, err
@@ -103,18 +105,13 @@ RETURNING id`, brokerID, baseCcy).Scan(&accountID)
 	for _, t := range trades {
 		in := t.Instrument
 		key := string(in.Type) + "|" + in.Symbol + "|" + in.Currency
+		if in.ConID != "" {
+			key = in.ConID
+		}
 
 		instrumentID, ok := instruments[key]
 		if !ok {
-			expiry := ""
-			if !in.Expiry.IsZero() {
-				expiry = in.Expiry.Format(time.DateOnly)
-			}
-			err = tx.QueryRowContext(ctx, `
-INSERT INTO instruments (type, symbol, underlying, currency, multiplier, expiry, strike, right)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-ON CONFLICT (type, symbol, currency) DO UPDATE SET symbol = symbol
-RETURNING id`, in.Type, in.Symbol, in.Underlying, in.Currency, in.Multiplier, expiry, int64(in.Strike), string(in.Right)).Scan(&instrumentID)
+			instrumentID, err = upsertInstrument(ctx, tx, in)
 			if err != nil {
 				return 0, fmt.Errorf("instrument %s: %w", in.Symbol, err)
 			}
@@ -127,18 +124,55 @@ RETURNING id`, in.Type, in.Symbol, in.Underlying, in.Currency, in.Multiplier, ex
 		}
 
 		res, err := tx.ExecContext(ctx, `
-INSERT INTO trades (account_id, instrument_id, source, source_id, kind, traded_at, quantity, price, commission, fx_to_base)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO trades (account_id, instrument_id, source, source_id, kind, effect, traded_at, quantity, price, commission, fx_to_base)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (account_id, source_id) DO NOTHING`,
-			accountID, instrumentID, t.Source, t.SourceID, kind, t.TradedAt.UTC().Format(time.RFC3339),
+			accountID, instrumentID, t.Source, t.SourceID, kind, string(t.Effect), t.TradedAt.UTC().Format(time.RFC3339),
 			int64(t.Quantity), int64(t.Price), int64(t.Commission), t.FxToBase)
 		if err != nil {
 			return 0, fmt.Errorf("trade %s: %w", t.SourceID, err)
 		}
 		if n, _ := res.RowsAffected(); n > 0 {
 			inserted++
+			continue
+		}
+
+		// already imported: fill in the effect for trades stored before it existed
+		_, err = tx.ExecContext(ctx, `
+UPDATE trades SET effect = ? WHERE account_id = ? AND source_id = ? AND effect = '' AND ? <> ''`,
+			string(t.Effect), accountID, t.SourceID, string(t.Effect))
+		if err != nil {
+			return 0, fmt.Errorf("trade %s: %w", t.SourceID, err)
 		}
 	}
 
 	return inserted, tx.Commit()
+}
+
+// upsertInstrument finds an instrument by broker contract id, then by symbol,
+// and creates it if unknown.
+func upsertInstrument(ctx context.Context, tx *sql.Tx, in models.Instrument) (int64, error) {
+	var id int64
+
+	if in.ConID != "" {
+		err := tx.QueryRowContext(ctx, `SELECT id FROM instruments WHERE conid = ?`, in.ConID).Scan(&id)
+		if err == nil {
+			return id, nil
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return 0, err
+		}
+	}
+
+	expiry := ""
+	if !in.Expiry.IsZero() {
+		expiry = in.Expiry.Format(time.DateOnly)
+	}
+	err := tx.QueryRowContext(ctx, `
+INSERT INTO instruments (conid, type, symbol, underlying, currency, multiplier, expiry, strike, right)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT (type, symbol, currency) DO UPDATE SET conid = CASE WHEN conid = '' THEN excluded.conid ELSE conid END
+RETURNING id`,
+		in.ConID, in.Type, in.Symbol, in.Underlying, in.Currency, in.Multiplier, expiry, int64(in.Strike), string(in.Right)).Scan(&id)
+	return id, err
 }
