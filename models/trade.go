@@ -1,61 +1,43 @@
 package models
 
-import (
-	"errors"
-	"strconv"
-	"strings"
-	"time"
-)
+import "time"
 
-type Trade struct {
-	TransactionId string `bson:"transactionId"`
-	Asset         string
-	Date          time.Time
-	Units         float64
-	UnitPrice     float64 `bson:"unitPrice"`
-	Commission    float64
-	Total         float64
-	ExchangeRate  float64 `bson:"exchangeRate"`
-	Multiplier    int64
-	IsOptionTrade bool `bson:"isOptionTrade"`
-}
-
-func (t Trade) GetOptionInfo() (*OptionInfo, error) {
-	if !t.IsOptionTrade {
-		return nil, errors.New("not an option trade")
-	}
-	parts := strings.Fields(t.Asset)
-	expiration, _ := time.Parse("20060102", parts[1])
-
-	strike, _ := strconv.ParseFloat(parts[2], 64)
-
-	var optionType OptionType
-
-	switch parts[3] {
-	case "CALL":
-		optionType = Call
-	case "PUT":
-		optionType = Put
-	}
-
-	return &OptionInfo{
-		Symbol:      parts[0],
-		Expiration:  expiration,
-		StrikePrice: strike,
-		Type:        optionType,
-	}, nil
-}
-
-type OptionType string
+type TradeKind string
 
 const (
-	Call OptionType = "CALL"
-	Put  OptionType = "PUT"
+	KindTrade    TradeKind = "TRADE"
+	KindExpire   TradeKind = "EXPIRE"
+	KindAssign   TradeKind = "ASSIGN"
+	KindExercise TradeKind = "EXERCISE"
 )
 
-type OptionInfo struct {
-	Symbol      string
-	StrikePrice float64
-	Expiration  time.Time
-	Type        OptionType
+// Trade is one imported fill. It is immutable once imported.
+type Trade struct {
+	ID         int64      `json:"id"`
+	AccountID  int64      `json:"accountId"`
+	Instrument Instrument `json:"instrument"`
+	Source     string     `json:"source"`   // import format, "qfx"
+	SourceID   string     `json:"sourceId"` // broker transaction id, unique per account
+	Kind       TradeKind  `json:"kind"`
+	TradedAt   time.Time  `json:"tradedAt"`
+	Quantity   Fixed      `json:"quantity"`   // signed: buy > 0, sell < 0
+	Price      Fixed      `json:"price"`      // per unit, in instrument currency
+	Commission Fixed      `json:"commission"` // positive = cost, in instrument currency
+	FxToBase   float64    `json:"fxToBase"`   // base currency per 1 unit of instrument currency, 0 = unknown
+}
+
+// Cash is the signed cash flow in instrument currency, net of commission:
+// buys are negative, sells positive.
+func (t Trade) Cash() Fixed {
+	gross := -t.Quantity.Float() * t.Price.Float() * float64(t.Instrument.Multiplier)
+	return FixedFromFloat(gross) - t.Commission
+}
+
+// CashBase is Cash converted to the account's base currency.
+// Falls back to the unconverted amount if the rate is unknown.
+func (t Trade) CashBase() float64 {
+	if t.FxToBase <= 0 {
+		return t.Cash().Float()
+	}
+	return t.Cash().Float() * t.FxToBase
 }

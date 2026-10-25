@@ -10,14 +10,12 @@ func GetPositions(trades []models.Trade) (map[string]*models.Position, []string)
 	positions := make(map[string]*models.Position)
 
 	for _, trade := range trades {
-		existing, ok := positions[trade.Asset]
-		var pos *models.Position
+		name := trade.Instrument.Name()
+		pos, ok := positions[name]
 
-		if ok {
-			pos = existing
-		} else {
-			pos = &models.Position{Asset: trade.Asset}
-			positions[trade.Asset] = pos
+		if !ok {
+			pos = &models.Position{Instrument: trade.Instrument}
+			positions[name] = pos
 		}
 		pos.AddTrade(trade)
 	}

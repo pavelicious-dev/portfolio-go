@@ -1,34 +1,35 @@
 package models
 
 import (
-	"strings"
 	"time"
 )
 
+// Position accumulates all trades of one instrument.
+// TODO: replaced by per round trip matching.
 type Position struct {
-	Asset string
+	Instrument Instrument
 
 	openedAt   time.Time
 	closedAt   time.Time
-	units      float64
+	units      Fixed
 	realized   float64
 	unrealized float64
 }
 
 func (p *Position) AddTrade(trade Trade) {
 	if p.openedAt.IsZero() {
-		p.openedAt = trade.Date
+		p.openedAt = trade.TradedAt
 	}
 
-	p.units += trade.Units
+	p.units += trade.Quantity
 
 	if p.units == 0 {
-		p.closedAt = trade.Date
-		p.realized += p.unrealized + trade.Total
+		p.closedAt = trade.TradedAt
+		p.realized += p.unrealized + trade.CashBase()
 		p.unrealized = 0
 	} else {
 		p.closedAt = time.Time{}
-		p.unrealized += trade.Total
+		p.unrealized += trade.CashBase()
 	}
 }
 
@@ -52,14 +53,11 @@ func (p Position) DaysOpen() int {
 }
 
 func (p Position) IsOptionPosition() bool {
-	return len(strings.Fields(p.Asset)) == 4
+	return p.Instrument.IsOption()
 }
 
 func (p Position) GetAssetName() string {
-	if p.IsOptionPosition() {
-		return strings.Fields(p.Asset)[0]
-	}
-	return p.Asset
+	return p.Instrument.Underlying
 }
 
 func (p Position) GetProfit() (float64, float64) {
