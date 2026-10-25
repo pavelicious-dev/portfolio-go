@@ -13,6 +13,7 @@ const (
 	Future       InstrumentType = "FUT"
 	FutureOption InstrumentType = "FOP"
 	CFD          InstrumentType = "CFD"
+	Bond         InstrumentType = "BOND"
 )
 
 type Right string

@@ -82,14 +82,16 @@ FROM trades t JOIN instruments i ON i.id = t.instrument_id`
 
 // ImportData is what one statement file adds to the database.
 type ImportData struct {
-	Trades  []models.Trade
-	Actions []models.CorporateAction
+	Trades     []models.Trade
+	Actions    []models.CorporateAction
+	CashEvents []models.CashEvent
 }
 
 // ImportResult counts the records that were not stored before.
 type ImportResult struct {
-	Trades  int
-	Actions int
+	Trades     int
+	Actions    int
+	CashEvents int
 }
 
 // Import stores trades and corporate actions for the given broker account in
@@ -187,6 +189,20 @@ ON CONFLICT (account_id, source_id) DO NOTHING`,
 		}
 		if n, _ := res.RowsAffected(); n > 0 {
 			result.Actions++
+		}
+	}
+
+	for _, e := range data.CashEvents {
+		res, err := tx.ExecContext(ctx, `
+INSERT INTO cash_events (account_id, source_id, category, happened_at, symbol, amount, currency, fx_to_base, memo)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT (account_id, source_id) DO NOTHING`,
+			accountID, e.SourceID, e.Category, formatTime(e.At), e.Symbol, int64(e.Amount), e.Currency, e.FxToBase, e.Memo)
+		if err != nil {
+			return result, fmt.Errorf("cash event %s: %w", e.SourceID, err)
+		}
+		if n, _ := res.RowsAffected(); n > 0 {
+			result.CashEvents++
 		}
 	}
 

@@ -23,7 +23,7 @@ func main() {
 	godotenv.Load()
 
 	if len(os.Args) < 2 {
-		log.Fatal("usage: report monthly | report assets [YYYY-MM] | report open [SYMBOL] | report unmatched [SYMBOL] | report ticker SYMBOL [YYYY|YYYY-MM] | report summary [YYYY|YYYY-MM]")
+		log.Fatal("usage: report monthly | report assets [YYYY-MM] | report open [SYMBOL] | report unmatched [SYMBOL] | report ticker SYMBOL [YYYY|YYYY-MM] | report summary [YYYY|YYYY-MM] | report cash [YYYY|YYYY-MM]")
 	}
 
 	ctx := context.Background()
@@ -38,12 +38,16 @@ func main() {
 		log.Fatal(err)
 	}
 
+	events, err := db.GetCashEvents(ctx)
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	switch os.Args[1] {
 	case "monthly":
-		for _, s := range reports.MonthlySummary(trips) {
-			fmt.Printf("%s - Stocks: %+9.2f€,\tOptions: %+9.2f€,\tOther: %+9.2f€,\tTotal: %+9.2f€\n",
-				s.Month, s.Stocks, s.Options, s.Other, s.Total())
-		}
+		all := reports.Summarize(trips, "", reports.Period{})
+		cash := reports.SummarizeCash(events, "", reports.Period{})
+		printMonths(reports.MergeMonths(all.Months, cash.Months))
 	case "assets":
 		month := ""
 		if len(os.Args) > 2 {
@@ -79,7 +83,7 @@ func main() {
 				log.Fatal(err)
 			}
 		}
-		printTicker(trips, reports.Summarize(trips, os.Args[2], period))
+		printTicker(trips, reports.Summarize(trips, os.Args[2], period), reports.SummarizeCash(events, os.Args[2], period))
 	case "summary":
 		period := reports.Period{}
 		if len(os.Args) > 2 {
@@ -88,7 +92,17 @@ func main() {
 				log.Fatal(err)
 			}
 		}
-		printSummary(reports.Summarize(trips, "", period))
+		printSummary(reports.Summarize(trips, "", period), reports.SummarizeCash(events, "", period))
+	case "cash":
+		period := reports.Period{}
+		if len(os.Args) > 2 {
+			var err error
+			if period, err = reports.ParsePeriod(os.Args[2]); err != nil {
+				log.Fatal(err)
+			}
+		}
+		printCash(reports.SummarizeCash(events, "", period))
+		return // trades are not part of this report
 	case "unmatched":
 		symbol := ""
 		if len(os.Args) > 2 {
@@ -172,57 +186,6 @@ func printUnmatched(unmatched []models.Unmatched, symbol string) {
 		"came from a corporate action (split, symbol change) that the QFX files do not contain.\n", count)
 }
 
-// printTicker prints the summary of one underlying.
-func printTicker(trips []models.RoundTrip, s reports.Summary) {
-	known := false
-	for _, rt := range trips {
-		if rt.Instrument.Underlying == s.Ticker {
-			known = true
-			break
-		}
-	}
-	if !known {
-		fmt.Printf("no trades found for %s\n", s.Ticker)
-		return
-	}
-
-	fmt.Printf("%s - %s\n\n", s.Ticker, s.Period)
-	printTotals(s)
-	fmt.Printf("Contracts traded %10d\n", s.Contracts)
-	fmt.Printf("Open round trips %10d\n", s.OpenTrips)
-	printTripStats(s)
-
-	if s.Period.Month == 0 && len(s.Months) > 0 {
-		fmt.Println("\nBy month")
-		for _, m := range s.Months {
-			fmt.Printf("  %s %+10.2f€\n", m.Month, m.PnL())
-		}
-	}
-}
-
-// printSummary prints the summary of everything traded in a period.
-func printSummary(s reports.Summary) {
-	fmt.Printf("Summary - %s\n\n", s.Period)
-	printTotals(s)
-	fmt.Printf("Underlyings      %10d\n", len(s.Tickers))
-	fmt.Printf("Contracts traded %10d\n", s.Contracts)
-	fmt.Printf("Open round trips %10d\n", s.OpenTrips)
-	printTripStats(s)
-
-	if s.Period.Month == 0 && len(s.Months) > 0 {
-		fmt.Println("\nBy month")
-		for _, m := range s.Months {
-			fmt.Printf("  %s  Stocks: %+9.2f€  Options: %+9.2f€  Other: %+9.2f€  Total: %+9.2f€\n",
-				m.Month, m.Stocks, m.Options, m.Other, m.PnL())
-		}
-		fmt.Printf("  %-7s  Stocks: %+9.2f€  Options: %+9.2f€  Other: %+9.2f€  Total: %+9.2f€\n",
-			"Total", s.Stocks, s.Options, s.Other, s.Realized)
-	}
-
-	printTickers("Best underlyings", s.Tickers, func(total float64) bool { return total > 0 })
-	printTickers("Worst underlyings", reversed(s.Tickers), func(total float64) bool { return total < 0 })
-}
-
 func printTotals(s reports.Summary) {
 	fmt.Printf("Realized P&L     %+10.2f€   (stocks %+.2f€, options %+.2f€, other %+.2f€)\n", s.Realized, s.Stocks, s.Options, s.Other)
 }
@@ -280,5 +243,110 @@ func printTrips(title string, trips []reports.TripResult) {
 	for _, t := range trips {
 		fmt.Printf("  %+10.2f€  %-26s %-5s %s to %s (%dd)\n", t.PnL, t.Instrument, t.Direction,
 			t.OpenedAt.Format(time.DateOnly), t.ClosedAt.Format(time.DateOnly), t.Days())
+	}
+}
+
+// printTicker prints the summary of one underlying.
+func printTicker(trips []models.RoundTrip, s reports.Summary, cash reports.CashSummary) {
+	known := false
+	for _, rt := range trips {
+		if rt.Instrument.Underlying == s.Ticker {
+			known = true
+			break
+		}
+	}
+	if !known {
+		fmt.Printf("no trades found for %s\n", s.Ticker)
+		return
+	}
+
+	fmt.Printf("%s - %s\n\n", s.Ticker, s.Period)
+	printTotals(s)
+	if cash.Dividends != 0 || cash.DividendTax != 0 || cash.Fees != 0 {
+		fmt.Printf("Dividends        %+10.2f€   (tax %+.2f€, fees %+.2f€)\n", cash.Dividends, cash.DividendTax, cash.Fees)
+		fmt.Printf("Total with income %9.2f€\n", s.Realized+cash.Income())
+	}
+	fmt.Printf("Contracts traded %10d\n", s.Contracts)
+	fmt.Printf("Open round trips %10d\n", s.OpenTrips)
+	printTripStats(s)
+
+	if s.Period.Month == 0 && len(s.Months) > 0 {
+		fmt.Println("\nBy month")
+		for _, m := range s.Months {
+			fmt.Printf("  %s %+10.2f€\n", m.Month, m.PnL())
+		}
+	}
+}
+
+// printSummary prints the summary of everything traded and booked in a period.
+func printSummary(s reports.Summary, cash reports.CashSummary) {
+	fmt.Printf("Summary - %s\n\n", s.Period)
+	printTotals(s)
+	fmt.Printf("Income and costs %+10.2f€   (dividends %+.2f€, interest %+.2f€, taxes %+.2f€, fees %+.2f€)\n",
+		cash.Income(), cash.Dividends, cash.Interest+cash.BorrowFees,
+		cash.DividendTax+cash.InterestTax, cash.DataFees+cash.Fees)
+	fmt.Printf("Total result     %+10.2f€\n", s.Realized+cash.Income())
+	fmt.Printf("Net deposits     %+10.2f€\n", cash.NetDeposits())
+	fmt.Printf("Underlyings      %10d\n", len(s.Tickers))
+	fmt.Printf("Contracts traded %10d\n", s.Contracts)
+	fmt.Printf("Open round trips %10d\n", s.OpenTrips)
+	printTripStats(s)
+
+	if s.Period.Month == 0 {
+		months := reports.MergeMonths(s.Months, cash.Months)
+		if len(months) > 0 {
+			fmt.Println("\nBy month")
+			printMonths(months)
+		}
+	}
+
+	printTickers("Best underlyings", s.Tickers, func(total float64) bool { return total > 0 })
+	printTickers("Worst underlyings", reversed(s.Tickers), func(total float64) bool { return total < 0 })
+}
+
+// printMonths prints the trading result and income of each month and the total.
+func printMonths(months []reports.OverviewMonth) {
+	var total reports.OverviewMonth
+	line := func(label string, m reports.OverviewMonth) {
+		fmt.Printf("%s - Stocks: %+9.2f€,\tOptions: %+9.2f€,\tOther: %+9.2f€,\tIncome: %+9.2f€,\tTotal: %+9.2f€\n",
+			label, m.Stocks, m.Options, m.Other, m.Income, m.Total())
+	}
+
+	for _, m := range months {
+		line(m.Month, m)
+		total.Stocks += m.Stocks
+		total.Options += m.Options
+		total.Other += m.Other
+		total.Income += m.Income
+	}
+	if len(months) > 1 {
+		line("Total  ", total)
+	}
+}
+
+// printCash prints deposits, income and costs of a period.
+func printCash(c reports.CashSummary) {
+	fmt.Printf("Cash - %s\n\n", c.Period)
+	fmt.Printf("Deposits            %+10.2f€\n", c.Deposits)
+	fmt.Printf("Withdrawals         %+10.2f€\n", c.Withdrawals)
+	fmt.Printf("Net deposits        %+10.2f€\n\n", c.NetDeposits())
+
+	fmt.Printf("Dividends           %+10.2f€\n", c.Dividends)
+	fmt.Printf("Dividend tax        %+10.2f€\n", c.DividendTax)
+	fmt.Printf("Interest            %+10.2f€\n", c.Interest)
+	fmt.Printf("Borrow fees         %+10.2f€\n", c.BorrowFees)
+	fmt.Printf("Interest tax        %+10.2f€\n", c.InterestTax)
+	fmt.Printf("Market data fees    %+10.2f€   (net of refunds)\n", c.DataFees)
+	fmt.Printf("Other fees          %+10.2f€\n", c.Fees)
+	fmt.Printf("Income and costs    %+10.2f€\n", c.Income())
+
+	if c.Period.Month != 0 || len(c.Months) == 0 {
+		return
+	}
+
+	fmt.Println("\nBy month")
+	for _, m := range c.Months {
+		fmt.Printf("  %s  Deposits: %+10.2f€  Dividends: %+9.2f€  Interest: %+8.2f€  Fees: %+8.2f€  Net: %+9.2f€\n",
+			m.Month, m.NetDeposits(), m.Dividends+m.DividendTax, m.Interest+m.BorrowFees+m.InterestTax, m.DataFees+m.Fees, m.Income())
 	}
 }

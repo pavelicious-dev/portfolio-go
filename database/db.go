@@ -40,8 +40,21 @@ func Open(path string) (*DB, error) {
 
 // migrate applies migrations/NNN_name.sql files newer than PRAGMA user_version.
 func (db *DB) migrate(ctx context.Context) error {
+	// Migrations may rebuild tables, which SQLite only allows safely with
+	// foreign keys off. Pin one connection, since the setting belongs to it.
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+
+	if _, err := conn.ExecContext(ctx, "PRAGMA foreign_keys = OFF"); err != nil {
+		return err
+	}
+	defer conn.ExecContext(context.WithoutCancel(ctx), "PRAGMA foreign_keys = ON")
+
 	var current int
-	if err := db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&current); err != nil {
+	if err := conn.QueryRowContext(ctx, "PRAGMA user_version").Scan(&current); err != nil {
 		return err
 	}
 
@@ -69,11 +82,15 @@ func (db *DB) migrate(ctx context.Context) error {
 			return err
 		}
 
-		tx, err := db.BeginTx(ctx, nil)
+		tx, err := conn.BeginTx(ctx, nil)
 		if err != nil {
 			return err
 		}
 		if _, err := tx.ExecContext(ctx, string(script)); err != nil {
+			tx.Rollback()
+			return fmt.Errorf("%s: %w", name, err)
+		}
+		if err := checkForeignKeys(ctx, tx); err != nil {
 			tx.Rollback()
 			return fmt.Errorf("%s: %w", name, err)
 		}
@@ -86,4 +103,24 @@ func (db *DB) migrate(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// checkForeignKeys fails if the migration left rows that reference missing rows.
+func checkForeignKeys(ctx context.Context, tx *sql.Tx) error {
+	rows, err := tx.QueryContext(ctx, "PRAGMA foreign_key_check")
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	if rows.Next() {
+		var table, parent string
+		var rowid sql.NullInt64
+		var fkid int
+		if err := rows.Scan(&table, &rowid, &parent, &fkid); err != nil {
+			return err
+		}
+		return fmt.Errorf("foreign key violation: row %d of %s references a missing row of %s", rowid.Int64, table, parent)
+	}
+	return rows.Err()
 }

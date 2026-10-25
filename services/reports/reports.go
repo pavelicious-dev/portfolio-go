@@ -28,50 +28,6 @@ func Month(t time.Time) string {
 	return t.In(location).Format("2006-01")
 }
 
-// MonthSummary is the realized P&L of one month in base currency, net of fees.
-type MonthSummary struct {
-	Month   string
-	Stocks  float64
-	Options float64
-	Other   float64 // futures, CFDs
-}
-
-func (m MonthSummary) Total() float64 {
-	return m.Stocks + m.Options + m.Other
-}
-
-// MonthlySummary lists realized P&L per month, ordered by month.
-func MonthlySummary(trips []models.RoundTrip) []MonthSummary {
-	months := map[string]*MonthSummary{}
-
-	for _, rt := range trips {
-		for _, m := range rt.Matches {
-			key := Month(m.ClosedAt)
-			s, ok := months[key]
-			if !ok {
-				s = &MonthSummary{Month: key}
-				months[key] = s
-			}
-
-			switch rt.Instrument.Type {
-			case models.Stock:
-				s.Stocks += m.PnLBase
-			case models.Option, models.FutureOption:
-				s.Options += m.PnLBase
-			default:
-				s.Other += m.PnLBase
-			}
-		}
-	}
-
-	result := make([]MonthSummary, 0, len(months))
-	for _, s := range months {
-		result = append(result, *s)
-	}
-	slices.SortFunc(result, func(a, b MonthSummary) int { return cmp.Compare(a.Month, b.Month) })
-	return result
-}
-
 // AssetSummary is the realized P&L of one underlying in base currency, net of fees.
 type AssetSummary struct {
 	Asset string

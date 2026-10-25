@@ -16,7 +16,10 @@ type QFXFile struct {
 	Account string // broker account id
 	Trades  []models.Trade
 	Actions []models.CorporateAction // splits and similar, from TRANSFER records
-	Skipped []string                 // TRANSFER records that were not understood
+	Skipped []string                 // records that were not understood
+
+	CashEvents []models.CashEvent // deposits, dividends, interest, taxes, fees
+	Ignored    map[string]int     // records of kinds that are not imported yet, by kind
 }
 
 func ParseQFX(r io.Reader) (*QFXFile, error) {
@@ -41,7 +44,7 @@ func ParseQFX(r io.Reader) (*QFXFile, error) {
 		options[o.SECINFO.SECID.UNIQUEID] = o
 	}
 
-	file := &QFXFile{Account: strings.TrimSpace(stmt.INVACCTFROM.ACCTID)}
+	file := &QFXFile{Account: strings.TrimSpace(stmt.INVACCTFROM.ACCTID), Ignored: map[string]int{}}
 	if file.Account == "" {
 		return nil, fmt.Errorf("no ACCTID found")
 	}
@@ -152,6 +155,13 @@ func ParseQFX(r io.Reader) (*QFXFile, error) {
 	file.Actions = actions
 	file.Skipped = append(file.Skipped, skipped...)
 
+	if err := parseCash(stmt, file); err != nil {
+		return nil, err
+	}
+	if err := parseBonds(stmt, secs.DEBTINFO, file); err != nil {
+		return nil, err
+	}
+
 	return file, nil
 }
 
@@ -229,7 +239,8 @@ type ofx struct {
 			STOCKINFO []struct {
 				SECINFO secInfo `xml:"SECINFO"`
 			}
-			OPTINFO []optInfo
+			OPTINFO  []optInfo
+			DEBTINFO []debtInfo
 		}
 	}
 }
@@ -264,6 +275,42 @@ type invStmt struct {
 			TFERACTION string
 			UNITPRICE  float64
 		}
+		INVBANKTRAN []struct {
+			STMTTRN struct {
+				TRNTYPE  string
+				DTPOSTED string
+				TRNAMT   float64
+				FITID    string
+				MEMO     string
+				CURRENCY currencyInfo
+			}
+		}
+		INCOME []struct {
+			INVTRAN    invTran
+			SECID      secID
+			INCOMETYPE string
+			TOTAL      float64
+			CURRENCY   currencyInfo
+		}
+		INVEXPENSE []struct {
+			INVTRAN  invTran
+			TOTAL    float64
+			CURRENCY currencyInfo
+		}
+		BUYDEBT []struct {
+			INVBUY invInfo
+		}
+		SELLDEBT []struct {
+			INVSELL    invInfo
+			SELLREASON string
+		}
+		// futures, CFDs and currencies: not imported yet, only counted
+		BUYOTHER []struct {
+			INVBUY invInfo
+		}
+		SELLOTHER []struct {
+			INVSELL invInfo
+		}
 		SELLOPT []struct {
 			INVSELL     invInfo
 			OPTSELLTYPE string
@@ -291,19 +338,25 @@ type secID struct {
 	UNIQUEID string
 }
 
+type invTran struct {
+	FITID   string
+	DTTRADE string
+	MEMO    string
+}
+
+type currencyInfo struct {
+	CURRATE float64
+	CURSYM  string
+}
+
 type invInfo struct {
-	INVTRAN struct {
-		FITID   string
-		DTTRADE string
-	}
+	INVTRAN    invTran
 	SecID      secID `xml:"SECID"`
 	UNITS      float64
 	UNITPRICE  float64
 	COMMISSION float64
-	CURRENCY   struct {
-		CURRATE float64
-		CURSYM  string
-	}
+	TOTAL      float64
+	CURRENCY   currencyInfo
 }
 
 // commission returns the commission in the trade currency. IB reports it in
@@ -332,4 +385,8 @@ func (s secInfo) conid() string {
 		return strings.TrimSpace(s.FIID)
 	}
 	return ""
+}
+
+type debtInfo struct {
+	SECINFO secInfo `xml:"SECINFO"`
 }
