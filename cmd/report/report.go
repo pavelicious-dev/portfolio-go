@@ -15,6 +15,7 @@ import (
 	"portfolio/models"
 	"portfolio/services/matching"
 	"portfolio/services/reports"
+	"portfolio/services/settlements"
 
 	"github.com/joho/godotenv"
 )
@@ -23,7 +24,7 @@ func main() {
 	godotenv.Load()
 
 	if len(os.Args) < 2 {
-		log.Fatal("usage: report monthly | report assets [YYYY-MM] | report open [SYMBOL] | report unmatched [SYMBOL] | report ticker SYMBOL [YYYY|YYYY-MM] | report summary [YYYY|YYYY-MM] | report cash [YYYY|YYYY-MM]")
+		log.Fatal("usage: report monthly | report assets [YYYY-MM] | report open [SYMBOL] | report unmatched [SYMBOL] | report ticker SYMBOL [YYYY|YYYY-MM] | report summary [YYYY|YYYY-MM] | report cash [YYYY|YYYY-MM] | report settlements")
 	}
 
 	ctx := context.Background()
@@ -39,6 +40,11 @@ func main() {
 	}
 
 	events, err := db.GetCashEvents(ctx)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	prices, err := settlements.LoadDir(config.CboeDir())
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -61,7 +67,7 @@ func main() {
 		if len(os.Args) > 2 {
 			symbol = os.Args[2]
 		}
-		trades, err := matching.LoadTrades(ctx, db)
+		trades, err := matching.LoadTrades(ctx, db, prices)
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -102,6 +108,24 @@ func main() {
 			}
 		}
 		printCash(reports.SummarizeCash(events, "", period))
+		return // trades are not part of this report
+	case "settlements":
+		_, settlement, err := matching.LoadSettledTrades(ctx, db, prices)
+		if err != nil {
+			log.Fatal(err)
+		}
+		fmt.Println("Cash-settled index options (SPX, SPXW, XSP, RUT, NDX)")
+		fmt.Println()
+		lines := settlement.Lines(0)
+		if len(lines) == 0 {
+			lines = []string{"no cash-settled index options expired in the imported statements"}
+		}
+		for _, line := range lines {
+			fmt.Println(line)
+		}
+		if len(settlement.Missing) > 0 {
+			fmt.Println("\ndownload them with: go run ./cmd/settlements   (SPX, SPXW, XSP, monthly SPX and RUT, into " + config.CboeDir() + ")")
+		}
 		return // trades are not part of this report
 	case "unmatched":
 		symbol := ""

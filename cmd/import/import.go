@@ -10,6 +10,7 @@ import (
 	"portfolio/database"
 	"portfolio/ingest"
 	"portfolio/services/matching"
+	"portfolio/services/settlements"
 
 	"github.com/joho/godotenv"
 )
@@ -17,8 +18,13 @@ import (
 func main() {
 	godotenv.Load()
 
-	if len(os.Args) != 2 {
-		log.Fatal("usage: import <folder with .qfx files>")
+	folder := config.StatementsDir()
+	switch len(os.Args) {
+	case 1:
+	case 2:
+		folder = os.Args[1]
+	default:
+		log.Fatalf("usage: import [folder with .qfx files, default %s]", folder)
 	}
 
 	ctx := context.Background()
@@ -28,14 +34,19 @@ func main() {
 	}
 	defer db.Close()
 
-	err = ingest.ImportFolder(ctx, db, os.Args[1], ingest.Options{
+	fmt.Printf("importing statements from %s\n", folder)
+	err = ingest.ImportFolder(ctx, db, folder, ingest.Options{
 		BaseCurrency: config.BaseCurrency(),
 	})
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	if err := matching.Rebuild(ctx, db); err != nil {
+	prices, err := settlements.LoadDir(config.CboeDir())
+	if err != nil {
+		log.Fatal(err)
+	}
+	if err := matching.Rebuild(ctx, db, prices); err != nil {
 		log.Fatalf("match trades: %v", err)
 	}
 	trips, err := db.GetRoundTrips(ctx, database.RoundTripQuery{})
@@ -44,4 +55,8 @@ func main() {
 	}
 	unmatched, _ := db.CountUnmatched(ctx)
 	fmt.Printf("matched %d round trips, %d closing trades without opening trade\n", len(trips), unmatched)
+
+	if _, settlement, err := matching.LoadSettledTrades(ctx, db, prices); err == nil && len(settlement.Missing) > 0 {
+		fmt.Printf("note: %d trades of cash-settled index options expired without a known settlement price and count as worthless (run: go run ./cmd/settlements, then see: report settlements)\n", settlement.MissingTrades())
+	}
 }

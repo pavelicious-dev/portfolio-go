@@ -34,7 +34,7 @@ func classifyCash(memo string, amount float64) (models.CashCategory, bool) {
 	switch {
 	case has("CASH TRADE:"):
 		return models.CashFXConversion, true
-	case has("ADJUSTMENT: COMMISSION"), has("- FEE"), has("SETTLEMENT FEE"):
+	case has("ADJUSTMENT:"), has("- FEE"), has("SETTLEMENT FEE"):
 		return models.CashFee, true
 	case has("DIVIDEND") && has("TAX"):
 		return models.CashDividendTax, true

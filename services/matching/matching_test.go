@@ -130,16 +130,51 @@ func TestClosingTradeWithoutOpening(t *testing.T) {
 	}
 }
 
-func TestClosingTradeLargerThanPosition(t *testing.T) {
-	sell := trade(stock, 1, -150, 12, 0)
-	sell.Effect = models.EffectClose
+func TestFlaggedCloseThatCrossesZeroOpensTheOtherSide(t *testing.T) {
+	// long 4 contracts, sold 2 + 3 with both fills flagged "to close", the
+	// leftover short contract expires worthless (bought back at 0)
+	sell1 := trade(option, 1, -2, 0.8, 0)
+	sell1.Effect = models.EffectClose
+	sell2 := trade(option, 1, -3, 0.85, 0)
+	sell2.Effect = models.EffectClose
+	expiry := trade(option, 1, 1, 0, 0)
+	expiry.TradedAt = expiry.TradedAt.Add(time.Hour)
+	expiry.Effect = models.EffectClose
 
-	res := Match([]models.Trade{trade(stock, 0, 100, 10, 0), sell})
-	if len(res.RoundTrips) != 1 || res.RoundTrips[0].IsOpen() {
+	res := Match([]models.Trade{trade(option, 0, 4, 2, 0), sell1, sell2, expiry})
+
+	if len(res.Unmatched) != 0 {
+		t.Fatalf("unmatched: %+v", res.Unmatched)
+	}
+	if len(res.RoundTrips) != 2 || res.RoundTrips[0].Direction != models.Long || res.RoundTrips[1].Direction != models.Short {
 		t.Fatalf("%+v", res.RoundTrips)
 	}
-	if len(res.Unmatched) != 1 || res.Unmatched[0].Quantity.Float() != 50 {
-		t.Errorf("unmatched: %+v", res.Unmatched)
+	for _, rt := range res.RoundTrips {
+		if rt.IsOpen() {
+			t.Errorf("still open: %+v", rt)
+		}
+	}
+	// long: 2 sold at 0.8 and 2 at 0.85 against 4 bought at 2.0
+	near(t, "long pnl", res.RoundTrips[0].RealizedPnL().Float(), (0.8-2)*2*100+(0.85-2)*2*100)
+	// short: 1 sold at 0.85, bought back at 0
+	near(t, "short pnl", res.RoundTrips[1].RealizedPnL().Float(), 0.85*100)
+}
+
+func TestClosingTradeWithoutAnyPositionStaysUnmatched(t *testing.T) {
+	sell := trade(stock, 1, -50, 12, 0)
+	sell.Effect = models.EffectClose
+
+	res := Match([]models.Trade{sell})
+	if len(res.RoundTrips) != 0 || len(res.Unmatched) != 1 || res.Unmatched[0].Quantity.Float() != 50 {
+		t.Errorf("%+v", res)
+	}
+
+	// a "close" in the direction of the open position is inconsistent as well
+	buy := trade(stock, 2, 10, 12, 0)
+	buy.Effect = models.EffectClose
+	res = Match([]models.Trade{trade(stock, 0, 100, 10, 0), buy})
+	if len(res.Unmatched) != 1 || res.Unmatched[0].Quantity.Float() != 10 || !res.RoundTrips[0].IsOpen() || res.RoundTrips[0].OpenQuantity.Float() != 100 {
+		t.Errorf("%+v", res)
 	}
 }
 

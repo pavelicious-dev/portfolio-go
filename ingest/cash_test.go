@@ -29,6 +29,7 @@ func TestClassifyCash(t *testing.T) {
 		{"NIO(62914V106) ADR Fee USD 0.02 PER SHARE - FEE", -15, models.CashFee},
 		{"INTERDEPOT SETTLEMENT FEE FOR: INVITAE C FOR NOV 2022", -10, models.CashFee},
 		{"ADJUSTMENT: COMMISSION", -0.6, models.CashFee},
+		{"ADJUSTMENT: OTHER", 0.13, models.CashFee},
 		{"USD CREDIT INT FOR OCT-2022", 4.9, models.CashInterest},
 		{"USD DEBIT INT FOR SEP-2022", -17.8, models.CashInterest},
 		{"USD SHORT CREDIT INTEREST FOR SEP-2025", 7.8, models.CashInterest},

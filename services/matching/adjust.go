@@ -2,10 +2,8 @@ package matching
 
 import (
 	"cmp"
-	"context"
 	"slices"
 
-	"portfolio/database"
 	"portfolio/models"
 )
 
@@ -38,17 +36,4 @@ func Adjust(trades []models.Trade, actions []models.CorporateAction) []models.Tr
 		}
 	}
 	return adjusted
-}
-
-// LoadTrades reads all trades and restates them for the stored corporate actions.
-func LoadTrades(ctx context.Context, db *database.DB) ([]models.Trade, error) {
-	trades, err := db.GetTrades(ctx, database.TradeQuery{})
-	if err != nil {
-		return nil, err
-	}
-	actions, err := db.GetCorporateActions(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return Adjust(trades, actions), nil
 }

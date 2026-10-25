@@ -65,7 +65,8 @@ func matchGroup(trades []models.Trade, result *models.MatchResult) {
 		}
 		rest := t.Quantity.Abs() // part of the trade not yet allocated
 
-		if current != nil && current.Direction != direction {
+		crossing := current != nil && current.Direction != direction
+		if crossing {
 			for rest > 0 && len(queue) > 0 {
 				open := &queue[0]
 				n := min(rest, open.remaining)
@@ -100,8 +101,11 @@ func matchGroup(trades []models.Trade, result *models.MatchResult) {
 			}
 		}
 
-		// a closing trade cannot open a position: what is left has no opening trade
-		if rest > 0 && t.Effect == models.EffectClose {
+		// A closing trade without a position to close has no opening trade. One that
+		// is larger than the position it closes is different: IB flags every fill of an
+		// order with the same effect, even when the last one crosses zero, so what is
+		// left over opens a position in the other direction.
+		if rest > 0 && t.Effect == models.EffectClose && !crossing {
 			result.Unmatched = append(result.Unmatched, models.Unmatched{Trade: t, Quantity: rest})
 			rest = 0
 		}
