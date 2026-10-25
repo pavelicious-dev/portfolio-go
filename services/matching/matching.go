@@ -9,6 +9,9 @@ import (
 	"portfolio/models"
 )
 
+// dust is the largest quantity (0.0001 units) treated as zero after rounding.
+const dust = models.Fixed(100)
+
 // lot is the not yet closed part of an opening trade.
 type lot struct {
 	trade     models.Trade
@@ -75,6 +78,19 @@ func matchGroup(trades []models.Trade, result *models.MatchResult) {
 				if open.remaining == 0 {
 					queue = queue[1:]
 				}
+			}
+
+			// split adjustments leave rounding dust, which is not a position
+			if rest <= dust {
+				rest = 0
+			}
+			var left models.Fixed
+			for _, l := range queue {
+				left += l.remaining
+			}
+			if left <= dust {
+				queue = nil
+				current.OpenQuantity = 0
 			}
 
 			if len(queue) == 0 {

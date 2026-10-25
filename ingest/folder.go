@@ -44,12 +44,20 @@ func importQFX(ctx context.Context, db *database.DB, path string, opts Options) 
 		return err
 	}
 
-	inserted := 0
-	if len(file.Trades) > 0 {
-		if inserted, err = db.ImportTrades(ctx, file.Account, opts.BaseCurrency, file.Trades); err != nil {
+	result := database.ImportResult{}
+	if len(file.Trades) > 0 || len(file.Actions) > 0 {
+		result, err = db.Import(ctx, file.Account, opts.BaseCurrency, database.ImportData{Trades: file.Trades, Actions: file.Actions})
+		if err != nil {
 			return err
 		}
 	}
-	fmt.Printf("%s: %d trades parsed, %d new (account %s)\n", filepath.Base(path), len(file.Trades), inserted, file.Account)
+	fmt.Printf("%s: %d trades parsed, %d new (account %s)", filepath.Base(path), len(file.Trades), result.Trades, file.Account)
+	if len(file.Actions) > 0 {
+		fmt.Printf("; %d corporate actions, %d new", len(file.Actions), result.Actions)
+	}
+	fmt.Println()
+	for _, s := range file.Skipped {
+		fmt.Printf("  skipped transfer: %s\n", s)
+	}
 	return nil
 }

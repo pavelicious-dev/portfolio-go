@@ -15,6 +15,8 @@ import (
 type QFXFile struct {
 	Account string // broker account id
 	Trades  []models.Trade
+	Actions []models.CorporateAction // splits and similar, from TRANSFER records
+	Skipped []string                 // TRANSFER records that were not understood
 }
 
 func ParseQFX(r io.Reader) (*QFXFile, error) {
@@ -113,6 +115,42 @@ func ParseQFX(r io.Reader) (*QFXFile, error) {
 			return nil, err
 		}
 	}
+
+	var transfers []transfer
+	for _, tr := range list.TRANSFER {
+		t := transfer{
+			fitid: tr.INVTRAN.FITID,
+			memo:  strings.TrimSpace(tr.INVTRAN.MEMO),
+			units: models.FixedFromFloat(tr.UNITS),
+			price: models.FixedFromFloat(tr.UNITPRICE),
+			out:   strings.EqualFold(strings.TrimSpace(tr.TFERACTION), "OUT"),
+		}
+
+		var err error
+		if t.at, err = parseOFXTime(tr.INVTRAN.DTTRADE); err != nil {
+			return nil, fmt.Errorf("transfer %s: %w", t.fitid, err)
+		}
+
+		// the records carry no currency, so assume the account's; instruments
+		// already known from trades keep theirs when stored
+		if opt, ok := options[tr.SECID.UNIQUEID]; ok {
+			t.instrument, err = opt.instrument(stmt.CURDEF, opt.SHPERCTRCT)
+		} else if sec, ok := stocks[tr.SECID.UNIQUEID]; ok && sec.TICKER != "" {
+			t.instrument = models.Instrument{ConID: sec.conid(), Type: models.Stock, Symbol: sec.TICKER, Underlying: sec.TICKER, Currency: stmt.CURDEF, Multiplier: 1}
+		} else {
+			err = fmt.Errorf("unknown security %q", tr.SECID.UNIQUEID)
+		}
+		if err != nil {
+			file.Skipped = append(file.Skipped, fmt.Sprintf("%s %s: %v", t.at.Format(time.DateOnly), t.memo, err))
+			continue
+		}
+		transfers = append(transfers, t)
+	}
+
+	trades, actions, skipped := classifyTransfers(transfers)
+	file.Trades = append(file.Trades, trades...)
+	file.Actions = actions
+	file.Skipped = append(file.Skipped, skipped...)
 
 	return file, nil
 }
@@ -214,6 +252,17 @@ type invStmt struct {
 			INVBUY     invInfo
 			OPTBUYTYPE string
 			SHPERCTRCT int64
+		}
+		TRANSFER []struct {
+			INVTRAN struct {
+				FITID   string
+				DTTRADE string
+				MEMO    string
+			}
+			SECID      secID
+			UNITS      float64
+			TFERACTION string
+			UNITPRICE  float64
 		}
 		SELLOPT []struct {
 			INVSELL     invInfo

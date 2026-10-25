@@ -28,6 +28,7 @@ type Trade struct {
 	SourceID   string     `json:"sourceId"` // broker transaction id, unique per account
 	Kind       TradeKind  `json:"kind"`
 	Effect     Effect     `json:"effect,omitempty"`
+	Memo       string     `json:"memo,omitempty"` // broker note, for transfers and the like
 	TradedAt   time.Time  `json:"tradedAt"`
 	Quantity   Fixed      `json:"quantity"`   // signed: buy > 0, sell < 0
 	Price      Fixed      `json:"price"`      // per unit, in instrument currency

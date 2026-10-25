@@ -83,11 +83,11 @@ func TestImportRoundTrip(t *testing.T) {
 	}
 
 	for run, want := range []int{2, 0} { // second import must be a no-op
-		got, err := db.ImportTrades(ctx, file.Account, "EUR", file.Trades)
+		res, err := db.Import(ctx, file.Account, "EUR", database.ImportData{Trades: file.Trades})
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got != want {
+		if got := res.Trades; got != want {
 			t.Errorf("run %d: inserted %d, want %d", run, got, want)
 		}
 	}

@@ -52,3 +52,15 @@ func (i Instrument) Name() string {
 func OCCSymbol(underlying string, expiry time.Time, right Right, strike Fixed) string {
 	return fmt.Sprintf("%-6s%s%s%08d", underlying, expiry.Format("060102"), right, int64(strike.Float()*1000+0.5))
 }
+
+// Same reports whether both describe the same contract: by database id, else
+// broker contract id, else by symbol.
+func (i Instrument) Same(o Instrument) bool {
+	switch {
+	case i.ID != 0 && o.ID != 0:
+		return i.ID == o.ID
+	case i.ConID != "" && o.ConID != "":
+		return i.ConID == o.ConID
+	}
+	return i.Type == o.Type && i.Symbol == o.Symbol && i.Currency == o.Currency
+}

@@ -35,7 +35,7 @@ func (db *DB) GetTrades(ctx context.Context, q TradeQuery) ([]models.Trade, erro
 	}
 
 	query := `
-SELECT t.id, t.account_id, t.source, t.source_id, t.kind, t.effect, t.traded_at,
+SELECT t.id, t.account_id, t.source, t.source_id, t.kind, t.effect, t.memo, t.traded_at,
        t.quantity, t.price, t.commission, t.fx_to_base,
        i.id, i.conid, i.type, i.symbol, i.underlying, i.currency, i.multiplier, i.expiry, i.strike, i.right
 FROM trades t JOIN instruments i ON i.id = t.instrument_id`
@@ -56,7 +56,7 @@ FROM trades t JOIN instruments i ON i.id = t.instrument_id`
 		var tradedAt, expiry string
 		var qty, price, commission, strike int64
 
-		err := rows.Scan(&t.ID, &t.AccountID, &t.Source, &t.SourceID, &t.Kind, &t.Effect, &tradedAt,
+		err := rows.Scan(&t.ID, &t.AccountID, &t.Source, &t.SourceID, &t.Kind, &t.Effect, &t.Memo, &tradedAt,
 			&qty, &price, &commission, &t.FxToBase,
 			&t.Instrument.ID, &t.Instrument.ConID, &t.Instrument.Type, &t.Instrument.Symbol, &t.Instrument.Underlying,
 			&t.Instrument.Currency, &t.Instrument.Multiplier, &expiry, &strike, &t.Instrument.Right)
@@ -80,13 +80,26 @@ FROM trades t JOIN instruments i ON i.id = t.instrument_id`
 	return trades, rows.Err()
 }
 
-// ImportTrades stores trades for the given broker account in one transaction.
-// Trades already present (same account and source id) are skipped.
-// It returns the number of newly inserted trades.
-func (db *DB) ImportTrades(ctx context.Context, brokerID, baseCcy string, trades []models.Trade) (int, error) {
+// ImportData is what one statement file adds to the database.
+type ImportData struct {
+	Trades  []models.Trade
+	Actions []models.CorporateAction
+}
+
+// ImportResult counts the records that were not stored before.
+type ImportResult struct {
+	Trades  int
+	Actions int
+}
+
+// Import stores trades and corporate actions for the given broker account in
+// one transaction. Records already present (same account and source id) are skipped.
+func (db *DB) Import(ctx context.Context, brokerID, baseCcy string, data ImportData) (ImportResult, error) {
+	var result ImportResult
+
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
-		return 0, err
+		return result, err
 	}
 	defer tx.Rollback()
 
@@ -96,26 +109,30 @@ INSERT INTO accounts (broker_id, base_ccy) VALUES (?, ?)
 ON CONFLICT (broker_id) DO UPDATE SET broker_id = broker_id
 RETURNING id`, brokerID, baseCcy).Scan(&accountID)
 	if err != nil {
-		return 0, fmt.Errorf("account %s: %w", brokerID, err)
+		return result, fmt.Errorf("account %s: %w", brokerID, err)
 	}
 
 	instruments := map[string]int64{}
-	inserted := 0
-
-	for _, t := range trades {
-		in := t.Instrument
+	instrumentID := func(in models.Instrument) (int64, error) {
 		key := string(in.Type) + "|" + in.Symbol + "|" + in.Currency
 		if in.ConID != "" {
 			key = in.ConID
 		}
+		if id, ok := instruments[key]; ok {
+			return id, nil
+		}
+		id, err := upsertInstrument(ctx, tx, in)
+		if err != nil {
+			return 0, fmt.Errorf("instrument %s: %w", in.Symbol, err)
+		}
+		instruments[key] = id
+		return id, nil
+	}
 
-		instrumentID, ok := instruments[key]
-		if !ok {
-			instrumentID, err = upsertInstrument(ctx, tx, in)
-			if err != nil {
-				return 0, fmt.Errorf("instrument %s: %w", in.Symbol, err)
-			}
-			instruments[key] = instrumentID
+	for _, t := range data.Trades {
+		id, err := instrumentID(t.Instrument)
+		if err != nil {
+			return result, err
 		}
 
 		kind := t.Kind
@@ -124,16 +141,16 @@ RETURNING id`, brokerID, baseCcy).Scan(&accountID)
 		}
 
 		res, err := tx.ExecContext(ctx, `
-INSERT INTO trades (account_id, instrument_id, source, source_id, kind, effect, traded_at, quantity, price, commission, fx_to_base)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO trades (account_id, instrument_id, source, source_id, kind, effect, memo, traded_at, quantity, price, commission, fx_to_base)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (account_id, source_id) DO NOTHING`,
-			accountID, instrumentID, t.Source, t.SourceID, kind, string(t.Effect), t.TradedAt.UTC().Format(time.RFC3339),
+			accountID, id, t.Source, t.SourceID, kind, string(t.Effect), t.Memo, formatTime(t.TradedAt),
 			int64(t.Quantity), int64(t.Price), int64(t.Commission), t.FxToBase)
 		if err != nil {
-			return 0, fmt.Errorf("trade %s: %w", t.SourceID, err)
+			return result, fmt.Errorf("trade %s: %w", t.SourceID, err)
 		}
 		if n, _ := res.RowsAffected(); n > 0 {
-			inserted++
+			result.Trades++
 			continue
 		}
 
@@ -142,11 +159,38 @@ ON CONFLICT (account_id, source_id) DO NOTHING`,
 UPDATE trades SET effect = ? WHERE account_id = ? AND source_id = ? AND effect = '' AND ? <> ''`,
 			string(t.Effect), accountID, t.SourceID, string(t.Effect))
 		if err != nil {
-			return 0, fmt.Errorf("trade %s: %w", t.SourceID, err)
+			return result, fmt.Errorf("trade %s: %w", t.SourceID, err)
 		}
 	}
 
-	return inserted, tx.Commit()
+	for _, a := range data.Actions {
+		fromID, err := instrumentID(a.From)
+		if err != nil {
+			return result, err
+		}
+		var toID sql.NullInt64
+		if a.Kind == models.ActionConvert {
+			id, err := instrumentID(a.To)
+			if err != nil {
+				return result, err
+			}
+			toID = sql.NullInt64{Int64: id, Valid: true}
+		}
+
+		res, err := tx.ExecContext(ctx, `
+INSERT INTO corporate_actions (account_id, source_id, kind, happened_at, instrument_id, to_instrument_id, ratio, memo)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT (account_id, source_id) DO NOTHING`,
+			accountID, a.SourceID, a.Kind, formatTime(a.At), fromID, toID, a.Ratio, a.Memo)
+		if err != nil {
+			return result, fmt.Errorf("corporate action %s: %w", a.SourceID, err)
+		}
+		if n, _ := res.RowsAffected(); n > 0 {
+			result.Actions++
+		}
+	}
+
+	return result, tx.Commit()
 }
 
 // upsertInstrument finds an instrument by broker contract id, then by symbol,

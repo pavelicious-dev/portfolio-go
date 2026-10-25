@@ -177,3 +177,37 @@ func formatTime(t time.Time) string {
 func parseTime(s string) (time.Time, error) {
 	return time.Parse(time.RFC3339, s)
 }
+
+// GetUnmatched returns the closing trades without a known opening trade, oldest first.
+func (db *DB) GetUnmatched(ctx context.Context) ([]models.Unmatched, error) {
+	rows, err := db.QueryContext(ctx, "SELECT trade_id, quantity FROM unmatched_closes")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	quantities := map[int64]models.Fixed{}
+	for rows.Next() {
+		var id, qty int64
+		if err := rows.Scan(&id, &qty); err != nil {
+			return nil, err
+		}
+		quantities[id] = models.Fixed(qty)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	trades, err := db.GetTrades(ctx, TradeQuery{})
+	if err != nil {
+		return nil, err
+	}
+
+	result := []models.Unmatched{}
+	for _, t := range trades { // already ordered by time
+		if qty, ok := quantities[t.ID]; ok {
+			result = append(result, models.Unmatched{Trade: t, Quantity: qty})
+		}
+	}
+	return result, nil
+}
