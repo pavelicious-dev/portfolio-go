@@ -93,7 +93,8 @@ func TestUpgradeKeepsDataAndAllowsBonds(t *testing.T) {
 	}
 
 	for table, want := range map[string]int{
-		"accounts": 1, "instruments": 2, "trades": 2, "round_trips": 1, "lot_matches": 1, "corporate_actions": 1,
+		"accounts": 1, "instruments": 2, "trades": 2, "corporate_actions": 1,
+		"round_trips": 0, "lot_matches": 0, // derived data is emptied by migration 8 and rebuilt by the next import
 	} {
 		if got := count("SELECT COUNT(*) FROM " + table); got != want {
 			t.Errorf("%s: %d rows, want %d", table, got, want)
@@ -104,7 +105,7 @@ func TestUpgradeKeepsDataAndAllowsBonds(t *testing.T) {
 	if got := count("SELECT COUNT(*) FROM trades_readable"); got != 2 {
 		t.Errorf("trades_readable: %d", got)
 	}
-	if got := count("SELECT COUNT(*) FROM round_trips_readable"); got != 1 {
+	if got := count("SELECT COUNT(*) FROM round_trips_readable"); got != 0 {
 		t.Errorf("round_trips_readable: %d", got)
 	}
 	if got := count("SELECT COUNT(*) FROM corporate_actions_readable"); got != 1 {
@@ -162,6 +163,85 @@ func TestFreshDatabaseHasAllTables(t *testing.T) {
 	for _, table := range []string{"cash_events", "corporate_actions", "round_trips", "lot_matches", "unmatched_closes"} {
 		if _, err := db.Exec("SELECT 1 FROM " + table + " LIMIT 1"); err != nil {
 			t.Errorf("%s: %v", table, err)
+		}
+	}
+}
+
+func TestUpgradeCorrectsPricesAndCashAmountsToTheTradeCurrency(t *testing.T) {
+	// version 7 is what an early build left behind: it had a table for settlement prices
+	// that was later dropped from the program, and no migration of that number is left
+	path := filepath.Join(t.TempDir(), "old.db")
+	oldDatabase(t, path, 7)
+
+	raw, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec(`CREATE TABLE settlement_prices (index_symbol TEXT NOT NULL, day TEXT NOT NULL, price REAL NOT NULL, source TEXT NOT NULL DEFAULT '', PRIMARY KEY (index_symbol, day))`); err != nil {
+		t.Fatal(err)
+	}
+	for _, stmt := range []string{
+		// a USD trade as stored by older versions: the price is the EUR amount 297.0297 at a rate of 1.0001
+		`INSERT INTO trades (id, account_id, instrument_id, source, source_id, traded_at, quantity, price, commission, fx_to_base)
+		   VALUES (10, 1, 1, 'qfx', 'usd', '2022-09-07T20:20:00Z', -500000000, 297029700, 3465000, 1.0001)`,
+		// a trade in the base currency, a transfer without rate: unchanged
+		`INSERT INTO trades (id, account_id, instrument_id, source, source_id, traded_at, quantity, price, commission, fx_to_base)
+		   VALUES (11, 1, 1, 'qfx', 'eur', '2022-09-08T20:20:00Z', 1000000, 50000000, 0, 1)`,
+		`INSERT INTO trades (id, account_id, instrument_id, source, source_id, traded_at, quantity, price, commission, fx_to_base)
+		   VALUES (12, 1, 1, 'qfx', 'transfer', '2022-09-09T20:20:00Z', 1000000, 2404000, 0, 0)`,
+		`INSERT INTO cash_events (account_id, source_id, category, happened_at, amount, currency, fx_to_base)
+		   VALUES (1, 'div', 'DIVIDEND', '2024-07-12T20:20:00Z', 109647556, 'USD', 0.9179)`,
+		`INSERT INTO cash_events (account_id, source_id, category, happened_at, amount, currency, fx_to_base)
+		   VALUES (1, 'fee', 'DATA_FEE', '2024-07-12T20:20:00Z', -1360000, 'EUR', 1)`,
+	} {
+		if _, err := raw.Exec(stmt); err != nil {
+			t.Fatalf("%v\n%s", err, stmt)
+		}
+	}
+	raw.Close()
+
+	db, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	value := func(query string) int64 {
+		t.Helper()
+		var n int64
+		if err := db.QueryRow(query).Scan(&n); err != nil {
+			t.Fatalf("%s: %v", query, err)
+		}
+		return n
+	}
+
+	if got := value("SELECT price FROM trades WHERE id = 10"); got < 296999990 || got > 297000010 { // 297.00
+		t.Errorf("USD trade price = %d", got)
+	}
+	if got := value("SELECT price FROM trades WHERE id = 11"); got != 50000000 {
+		t.Errorf("base currency trade changed: %d", got)
+	}
+	if got := value("SELECT price FROM trades WHERE id = 12"); got != 2404000 {
+		t.Errorf("transfer changed: %d", got)
+	}
+	if got := value("SELECT amount FROM cash_events WHERE source_id = 'div'"); got < 119454000 || got > 119456000 { // 119.455 USD
+		t.Errorf("dividend = %d", got)
+	}
+	if got := value("SELECT amount FROM cash_events WHERE source_id = 'fee'"); got != -1360000 {
+		t.Errorf("fee changed: %d", got)
+	}
+
+	if got := value("SELECT COUNT(*) FROM sqlite_master WHERE name = 'settlement_prices'"); got != 0 {
+		t.Error("the table of the early build is still there")
+	}
+	if got := value("PRAGMA user_version"); got != 8 {
+		t.Errorf("user_version = %d", got)
+	}
+
+	// derived data is gone until the next import rebuilds it, the facts stay
+	for table, want := range map[string]int64{"round_trips": 0, "lot_matches": 0, "trades": 5} {
+		if got := value("SELECT COUNT(*) FROM " + table); got != want {
+			t.Errorf("%s: %d rows, want %d", table, got, want)
 		}
 	}
 }

@@ -236,3 +236,10 @@ RETURNING id`,
 		in.ConID, in.Type, in.Symbol, in.Underlying, in.Currency, in.Multiplier, expiry, int64(in.Strike), string(in.Right)).Scan(&id)
 	return id, err
 }
+
+// CountTrades is the number of stored trades.
+func (db *DB) CountTrades(ctx context.Context) (int, error) {
+	var n int
+	err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM trades").Scan(&n)
+	return n, err
+}

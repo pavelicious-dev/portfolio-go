@@ -31,7 +31,7 @@ type LotMatch struct {
 	Quantity     Fixed     `json:"quantity"` // absolute
 	PnL          Fixed     `json:"pnl"`      // instrument currency, net of fees
 	Fees         Fixed     `json:"fees"`
-	PnLBase      float64   `json:"pnlBase"` // each leg converted at its own trade rate
+	PnLBase      float64   `json:"pnlBase"` // PnL converted at the rate of the closing trade, as IB reports it
 }
 
 func (r RoundTrip) IsOpen() bool {

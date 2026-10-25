@@ -68,7 +68,7 @@ func ParseQFX(r io.Reader) (*QFXFile, error) {
 			TradedAt:   tradedAt,
 			// OFX reports sells with negative units; don't rely on it
 			Quantity:   models.Fixed(sign) * models.FixedFromFloat(info.UNITS).Abs(),
-			Price:      models.FixedFromFloat(info.UNITPRICE),
+			Price:      models.FixedFromFloat(info.UNITPRICE / rate),
 			Commission: models.FixedFromFloat(info.commission(rate)),
 			FxToBase:   rate,
 		})
@@ -217,8 +217,13 @@ func (o optInfo) underlying() string {
 	return ""
 }
 
-// currency returns the trade currency and its rate to the base currency.
-// Without a CURRENCY element OFX amounts are in the account's default currency.
+// currency returns the currency a trade was made in and its rate to the base currency.
+//
+// All amounts of a record (price, commission, total) are stated in the account's
+// base currency, converted at that rate; CURSYM only tells what they were converted
+// from. Divided by the rate they give the amounts in the trade currency, where
+// prices are round numbers again: 297.0297 at a rate of 1.0001 is 297.00.
+// Without a CURRENCY element the trade was made in the base currency itself.
 func (i invInfo) currency(def string) (string, float64) {
 	if i.CURRENCY.CURSYM == "" || i.CURRENCY.CURRATE == 0 {
 		return def, 1
@@ -359,8 +364,7 @@ type invInfo struct {
 	CURRENCY   currencyInfo
 }
 
-// commission returns the commission in the trade currency. IB reports it in
-// the account's base currency while prices are in the trade currency.
+// commission returns the commission in the trade currency.
 func (i invInfo) commission(rate float64) float64 {
 	return math.Abs(i.COMMISSION) / rate
 }

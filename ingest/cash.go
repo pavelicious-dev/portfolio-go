@@ -90,7 +90,7 @@ func parseCash(stmt invStmt, file *QFXFile) error {
 			Category: category,
 			At:       when,
 			Symbol:   symbolFromMemo(memo),
-			Amount:   models.FixedFromFloat(amount),
+			Amount:   models.FixedFromFloat(amount / rate), // stated in base currency, kept in the original one
 			Currency: currency,
 			FxToBase: rate,
 			Memo:     strings.TrimSpace(memo),

@@ -143,7 +143,9 @@ func newMatch(open, close models.Trade, n models.Fixed) models.LotMatch {
 		Quantity:     n,
 		PnL:          models.FixedFromFloat(openCash + closeCash),
 		Fees:         models.FixedFromFloat(openFee + closeFee),
-		PnLBase:      openCash*open.Rate() + closeCash*close.Rate(),
+		// like IB: the profit in the trade currency, converted at the rate of the closing day.
+		// The currency move of the money tied up in between is not trading profit.
+		PnLBase: (openCash + closeCash) * close.Rate(),
 	}
 }
 

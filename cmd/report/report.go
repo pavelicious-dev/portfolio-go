@@ -39,6 +39,12 @@ func main() {
 		log.Fatal(err)
 	}
 
+	if len(trips) == 0 {
+		if n, err := db.CountTrades(ctx); err == nil && n > 0 {
+			log.Fatal("the round trips are not computed yet (a new version recalculates them): run go run ./cmd/import")
+		}
+	}
+
 	events, err := db.GetCashEvents(ctx)
 	if err != nil {
 		log.Fatal(err)

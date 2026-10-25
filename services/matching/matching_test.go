@@ -178,7 +178,10 @@ func TestClosingTradeWithoutAnyPositionStaysUnmatched(t *testing.T) {
 	}
 }
 
-func TestBaseCurrencyUsesRateOfEachLeg(t *testing.T) {
+// Like IB, the profit is made in the trade currency and converted at the rate of the
+// closing day. The change of the exchange rate while the money was invested is not
+// part of it (a purchase at 0.9 and a sale at 0.8 would otherwise show a loss).
+func TestBaseCurrencyProfitUsesTheRateOfTheClosingTrade(t *testing.T) {
 	buy := trade(stock, 0, 10, 100, 0)
 	buy.FxToBase = 0.9
 	sell := trade(stock, 1, -10, 110, 0)
@@ -186,7 +189,7 @@ func TestBaseCurrencyUsesRateOfEachLeg(t *testing.T) {
 
 	rt := Match([]models.Trade{buy, sell}).RoundTrips[0]
 	near(t, "pnl usd", rt.RealizedPnL().Float(), 100)
-	near(t, "pnl base", rt.RealizedBase(), -1000*0.9+1100*0.8)
+	near(t, "pnl base", rt.RealizedBase(), 100*0.8)
 }
 
 func TestInstrumentsAndAccountsAreSeparate(t *testing.T) {

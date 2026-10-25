@@ -210,3 +210,40 @@ func TestMonthlySPXSettlesOnTheOpenWeeklySPXWOnTheClose(t *testing.T) {
 		t.Errorf("%+v %+v", settled[0], report)
 	}
 }
+
+// The cash settlement of two SPXW puts as IB's statement lists it for 2022-09-13,
+// when the index settled at 3932.69: -2731 for the short 3960 put, +1731 for the
+// long 3950 put, -1000 together.
+func TestSettleMatchesTheIBStatement(t *testing.T) {
+	expiry := time.Date(2022, 9, 13, 0, 0, 0, 0, time.UTC)
+	short3960 := indexOption(1, "SPXW", models.Put, 3960, expiry)
+	long3950 := indexOption(2, "SPXW", models.Put, 3950, expiry)
+	long3930 := indexOption(3, "SPXW", models.Put, 3930, expiry) // out of the money: nothing to settle
+
+	end := at("2022-09-13", 16, 20)
+	trades := []models.Trade{
+		fill(short3960, at("2022-09-13", 9, 46), -1, 3.41), fill(short3960, end, 1, 0),
+		fill(long3950, at("2022-09-13", 9, 46), 1, 2.36), fill(long3950, end, -1, 0),
+		fill(long3930, at("2022-09-13", 15, 48), 1, 4.92), fill(long3930, end, -1, 0),
+	}
+	settled, report := Settle(trades, []models.SettlementPrice{price("2022-09-13", "SPX", 3932.69)})
+
+	cash := func(id int64) float64 {
+		for _, tr := range settled {
+			if tr.Instrument.ID == id && tr.TradedAt.Equal(end) {
+				return tr.Cash().Float()
+			}
+		}
+		t.Fatalf("no expiry of %d", id)
+		return 0
+	}
+	near(t, "short 3960 put", cash(1), -2731)
+	near(t, "long 3950 put", cash(2), 1731)
+	near(t, "out of the money put", cash(3), 0)
+	near(t, "together", cash(1)+cash(2), -1000)
+
+	if report.Indexes[0].Expiries != 3 || report.Indexes[0].InTheMoney != 2 {
+		t.Errorf("%+v", report.Indexes)
+	}
+	near(t, "settlement cash in the report", report.Indexes[0].Cash, -1000)
+}

@@ -2,6 +2,7 @@ package ingest
 
 import (
 	"context"
+	"math"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -115,11 +116,11 @@ func TestParseCashEvents(t *testing.T) {
 	if d := byID["d1"]; d.Category != models.CashDeposit || d.Amount.Float() != 2000 || d.Currency != "EUR" || d.FxToBase != 1 {
 		t.Errorf("deposit: %+v", d)
 	}
-	if i := byID["i1"]; i.Category != models.CashInterest || i.Currency != "USD" || i.FxToBase != 0.85 || i.AmountBase() != -17.5*0.85 {
+	if i := byID["i1"]; i.Category != models.CashInterest || i.Currency != "USD" || i.FxToBase != 0.85 || math.Abs(i.AmountBase()+17.5) > 1e-6 || math.Abs(i.Amount.Float()+17.5/0.85) > 1e-6 { // stated in EUR, kept in USD
 		t.Errorf("interest: %+v", i)
 	}
 	div := byID["div1"]
-	if div.Category != models.CashDividend || div.Symbol != "YMAX" || div.Amount.Float() != 81.95 {
+	if div.Category != models.CashDividend || div.Symbol != "YMAX" || math.Abs(div.AmountBase()-81.95) > 1e-6 || math.Abs(div.Amount.Float()-81.95/0.9529) > 1e-5 {
 		t.Errorf("dividend: %+v", div)
 	}
 	if !div.At.Equal(time.Date(2025, 1, 25, 1, 20, 0, 0, time.UTC)) {
