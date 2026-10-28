@@ -8,7 +8,8 @@ import (
 )
 
 // LoadTrades reads all trades, restated for the stored corporate actions and
-// with the expiries of cash-settled index options priced from the given settlement prices.
+// with the expiries of cash-settled index options priced from the given settlement prices
+// and the premiums of assigned and exercised options rolled into their shares.
 func LoadTrades(ctx context.Context, db *database.DB, prices []models.SettlementPrice) ([]models.Trade, error) {
 	trades, _, err := LoadSettledTrades(ctx, db, prices)
 	return trades, err
@@ -26,7 +27,7 @@ func LoadSettledTrades(ctx context.Context, db *database.DB, prices []models.Set
 	}
 
 	settled, report := Settle(Adjust(trades, actions), prices)
-	return settled, report, nil
+	return RollPremiums(settled), report, nil
 }
 
 // Rebuild recomputes all round trips from the stored trades and corporate actions

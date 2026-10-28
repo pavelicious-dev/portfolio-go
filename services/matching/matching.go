@@ -135,17 +135,23 @@ func newMatch(open, close models.Trade, n models.Fixed) models.LotMatch {
 	openCash, openFee := legCash(open, n)
 	closeCash, closeFee := legCash(close, n)
 
+	pnl := openCash + closeCash
+	if close.Kind == models.KindAssign || close.Kind == models.KindExercise {
+		// the premium went into the cost of the delivered shares, see RollPremiums
+		pnl = 0
+	}
+
 	return models.LotMatch{
 		OpenTradeID:  open.ID,
 		CloseTradeID: close.ID,
 		OpenedAt:     open.TradedAt,
 		ClosedAt:     close.TradedAt,
 		Quantity:     n,
-		PnL:          models.FixedFromFloat(openCash + closeCash),
+		PnL:          models.FixedFromFloat(pnl),
 		Fees:         models.FixedFromFloat(openFee + closeFee),
 		// like IB: the profit in the trade currency, converted at the rate of the closing day.
 		// The currency move of the money tied up in between is not trading profit.
-		PnLBase: (openCash + closeCash) * close.Rate(),
+		PnLBase: pnl * close.Rate(),
 	}
 }
 
