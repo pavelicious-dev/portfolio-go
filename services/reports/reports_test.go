@@ -67,6 +67,32 @@ func closedTrip(id int64, ticker string, opened, closed time.Time, pnl float64) 
 	}
 }
 
+func TestClosedTrips(t *testing.T) {
+	trips := []models.RoundTrip{
+		closedTrip(1, "AAA", day(0), day(70), 100),
+		closedTrip(2, "BBB", day(1), day(35), -50),
+		closedTrip(3, "AAA", day(2), day(5), 10),
+	}
+	trips = append(trips, models.RoundTrip{ID: 4, Instrument: inst, OpenedAt: day(1), OpenQuantity: 1,
+		Matches: []models.LotMatch{{ClosedAt: day(3), PnLBase: 5}}}) // still open
+
+	got := ClosedTrips(trips, "", Period{Year: 2024})
+	if len(got) != 3 || got[0].PnL != 10 || got[1].PnL != -50 || got[2].PnL != 100 {
+		t.Errorf("by close date: %+v", got)
+	}
+
+	// day(35) is February 5th
+	if got := ClosedTrips(trips, "", Period{Year: 2024, Month: 2}); len(got) != 1 || got[0].PnL != -50 {
+		t.Errorf("february: %+v", got)
+	}
+	if got := ClosedTrips(trips, "aaa", Period{}); len(got) != 2 {
+		t.Errorf("ticker filter: %+v", got)
+	}
+	if got := ClosedTrips(trips, "", Period{Year: 2023}); len(got) != 0 {
+		t.Errorf("other year: %+v", got)
+	}
+}
+
 func TestParsePeriod(t *testing.T) {
 	for in, want := range map[string]Period{"": {}, "2024": {Year: 2024}, "2024-03": {Year: 2024, Month: 3}} {
 		if got, err := ParsePeriod(in); err != nil || got != want {

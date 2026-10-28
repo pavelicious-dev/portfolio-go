@@ -62,9 +62,25 @@ func (p Period) Contains(t time.Time) bool {
 type TripResult struct {
 	Instrument string
 	Direction  models.Direction
+	Quantity   models.Fixed // largest size held
 	OpenedAt   time.Time
 	ClosedAt   time.Time
-	PnL        float64
+	PnL        float64 // base currency
+	Currency   string  // of the instrument
+	PnLLocal   float64 // in Currency
+}
+
+func newTripResult(rt models.RoundTrip) TripResult {
+	return TripResult{
+		Instrument: rt.Instrument.Name(),
+		Direction:  rt.Direction,
+		Quantity:   rt.MaxQuantity,
+		OpenedAt:   rt.OpenedAt,
+		ClosedAt:   rt.ClosedAt,
+		PnL:        rt.RealizedBase(),
+		Currency:   rt.Instrument.Currency,
+		PnLLocal:   rt.RealizedPnL().Float(),
+	}
 }
 
 func (r TripResult) Days() int {
@@ -191,8 +207,8 @@ func Summarize(trips []models.RoundTrip, ticker string, period Period) Summary {
 			continue
 		}
 
-		pnl := rt.RealizedBase()
-		result := TripResult{Instrument: rt.Instrument.Name(), Direction: rt.Direction, OpenedAt: rt.OpenedAt, ClosedAt: rt.ClosedAt, PnL: pnl}
+		result := newTripResult(rt)
+		pnl := result.PnL
 		results = append(results, result)
 		days += float64(result.Days())
 

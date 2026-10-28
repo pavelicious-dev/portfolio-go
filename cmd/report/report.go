@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
+	"maps"
 	"os"
 	"slices"
 	"strings"
@@ -24,7 +26,7 @@ func main() {
 	godotenv.Load()
 
 	if len(os.Args) < 2 {
-		log.Fatal("usage: report monthly | report assets [YYYY-MM] | report open [SYMBOL] | report unmatched [SYMBOL] | report ticker SYMBOL [YYYY|YYYY-MM] | report summary [YYYY|YYYY-MM] | report cash [YYYY|YYYY-MM] | report settlements")
+		log.Fatal("usage: report monthly | report assets [YYYY-MM] | report open [SYMBOL] | report unmatched [SYMBOL] | report ticker SYMBOL [YYYY|YYYY-MM] | report summary [YYYY|YYYY-MM] | report trips [YYYY|YYYY-MM] [-o FILE] | report cash [YYYY|YYYY-MM] | report settlements")
 	}
 
 	ctx := context.Background()
@@ -105,6 +107,14 @@ func main() {
 			}
 		}
 		printSummary(reports.Summarize(trips, "", period), reports.SummarizeCash(events, "", period))
+	case "trips":
+		period, out, err := parseTripsArgs(os.Args[2:])
+		if err != nil {
+			log.Fatal(err)
+		}
+		if err := writeTrips(out, reports.ClosedTrips(trips, "", period), period); err != nil {
+			log.Fatal(err)
+		}
 	case "cash":
 		period := reports.Period{}
 		if len(os.Args) > 2 {
@@ -151,6 +161,77 @@ func main() {
 	if n, err := db.CountUnmatched(ctx); err == nil && n > 0 {
 		fmt.Printf("\nnote: %d closing trades have no opening trade in the database (missing statements, or corporate actions such as splits) and are not included\n", n)
 	}
+}
+
+// parseTripsArgs reads [YYYY | YYYY-MM] [-o FILE].
+func parseTripsArgs(args []string) (period reports.Period, out string, err error) {
+	for i := 0; i < len(args); i++ {
+		switch arg := args[i]; arg {
+		case "-o", "--out":
+			if i++; i == len(args) {
+				return period, "", fmt.Errorf("%s needs a file name", arg)
+			}
+			out = args[i]
+		default:
+			if period, err = reports.ParsePeriod(arg); err != nil {
+				return period, "", err
+			}
+		}
+	}
+	return period, out, nil
+}
+
+// writeTrips prints the trips to stdout, or to the file if one is given.
+func writeTrips(file string, trips []reports.TripResult, period reports.Period) error {
+	if file == "" {
+		printRoundTrips(os.Stdout, trips, period)
+		return nil
+	}
+
+	f, err := os.Create(file)
+	if err != nil {
+		return err
+	}
+	printRoundTrips(f, trips, period)
+	if err := f.Close(); err != nil {
+		return err
+	}
+	fmt.Printf("wrote %d round trips to %s\n", len(trips), file)
+	return nil
+}
+
+// local is the result in the currency of the instrument, e.g. "+72.90 USD".
+func local(t reports.TripResult) string {
+	return fmt.Sprintf("%+.2f %s", t.PnLLocal, t.Currency)
+}
+
+// printRoundTrips lists the round trips closed in the period with their result, and the total.
+func printRoundTrips(out io.Writer, trips []reports.TripResult, period reports.Period) {
+	fmt.Fprintf(out, "Round trips closed - %s\n\n", period)
+	if len(trips) == 0 {
+		fmt.Fprintln(out, "no round trips were closed in this period")
+		return
+	}
+
+	w := tabwriter.NewWriter(out, 0, 0, 2, ' ', tabwriter.AlignRight)
+	fmt.Fprintln(w, "Opened\tClosed\tDays\tInstrument\tSide\tQty\tP/L\tP/L €\t")
+
+	var total float64
+	byCurrency := map[string]float64{}
+	for _, t := range trips {
+		fmt.Fprintf(w, "%s\t%s\t%d\t%s\t%s\t%s\t%s\t%+.2f€\t\n", t.OpenedAt.In(reports.Location()).Format(time.DateOnly),
+			t.ClosedAt.In(reports.Location()).Format(time.DateOnly), t.Days(), t.Instrument, t.Direction, t.Quantity, local(t), t.PnL)
+		total += t.PnL
+		byCurrency[t.Currency] += t.PnLLocal
+	}
+	w.Flush()
+
+	currencies := slices.Sorted(maps.Keys(byCurrency))
+	parts := make([]string, len(currencies))
+	for i, c := range currencies {
+		parts[i] = fmt.Sprintf("%+.2f %s", byCurrency[c], c)
+	}
+	fmt.Fprintf(out, "\n%d round trips, total %+.2f€   (%s)\n", len(trips), total, strings.Join(parts, ", "))
 }
 
 // printOpen lists positions as of the given date, normally that of the last imported trade.
@@ -271,7 +352,7 @@ func printTrips(title string, trips []reports.TripResult) {
 	}
 	fmt.Printf("\n%s\n", title)
 	for _, t := range trips {
-		fmt.Printf("  %+10.2f€  %-26s %-5s %s to %s (%dd)\n", t.PnL, t.Instrument, t.Direction,
+		fmt.Printf("  %+10.2f€  %+12s  %-26s %-5s %s to %s (%dd)\n", t.PnL, local(t), t.Instrument, t.Direction,
 			t.OpenedAt.Format(time.DateOnly), t.ClosedAt.Format(time.DateOnly), t.Days())
 	}
 }

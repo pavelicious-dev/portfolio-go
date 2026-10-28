@@ -23,6 +23,9 @@ func mustLoad(name string) *time.Location {
 	return loc
 }
 
+// Location is the time zone all report dates are shown in.
+func Location() *time.Location { return location }
+
 // Month is "YYYY-MM".
 func Month(t time.Time) string {
 	return t.In(location).Format("2006-01")
