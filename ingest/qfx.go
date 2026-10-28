@@ -4,7 +4,6 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io"
-	"math"
 	"strings"
 	"time"
 
@@ -364,9 +363,10 @@ type invInfo struct {
 	CURRENCY   currencyInfo
 }
 
-// commission returns the commission in the trade currency.
+// commission returns the commission in the trade currency. It keeps its sign: positive is a
+// cost, negative a rebate or correction, and TOTAL = -gross - COMMISSION holds either way.
 func (i invInfo) commission(rate float64) float64 {
-	return math.Abs(i.COMMISSION) / rate
+	return i.COMMISSION / rate
 }
 
 // effectOf maps an OFX buy/sell type (BUYTOOPEN, SELLTOCLOSE, BUYTOCOVER,

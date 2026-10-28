@@ -149,3 +149,36 @@ func TestAmountsOfARecordAreInBaseCurrency(t *testing.T) {
 		t.Errorf("cash in base currency = %v, want 148511.38 (TOTAL)", got)
 	}
 }
+
+// IB books a negative commission for a rebate or correction; the broker's TOTAL is
+// the cash flow after it, so the sign must survive the import.
+func TestParseQFXNegativeCommission(t *testing.T) {
+	const sample = `<OFX><INVSTMTMSGSRSV1><INVSTMTTRNRS><INVSTMTRS>
+<CURDEF>EUR</CURDEF>
+<INVACCTFROM><ACCTID>U1234567</ACCTID></INVACCTFROM>
+<INVTRANLIST>
+<BUYOPT><INVBUY><INVTRAN><FITID>1</FITID><DTTRADE>20220912131339.000[-4:EDT]</DTTRADE></INVTRAN>
+<SECID><UNIQUEID>O1</UNIQUEID></SECID><UNITS>1</UNITS><UNITPRICE>0.3754096</UNITPRICE><COMMISSION>-0.49479973</COMMISSION>
+<TOTAL>-37.04616027</TOTAL><CURRENCY><CURRATE>0.9879</CURRATE><CURSYM>USD</CURSYM></CURRENCY></INVBUY>
+<OPTBUYTYPE>BUYTOOPEN</OPTBUYTYPE><SHPERCTRCT>100</SHPERCTRCT></BUYOPT>
+</INVTRANLIST>
+</INVSTMTRS></INVSTMTTRNRS></INVSTMTMSGSRSV1>
+<SECLISTMSGSRSV1><SECLIST>
+<OPTINFO><SECINFO><SECID><UNIQUEID>O1</UNIQUEID></SECID><SECNAME>ARQQ 16SEP22 7.5 C</SECNAME><TICKER>ARQQ  220916C00007500</TICKER></SECINFO>
+<OPTTYPE>CALL</OPTTYPE><STRIKEPRICE>7.5</STRIKEPRICE><DTEXPIRE>20220916</DTEXPIRE><SHPERCTRCT>100</SHPERCTRCT></OPTINFO>
+</SECLIST></SECLISTMSGSRSV1>
+</OFX>
+`
+	file, err := ParseQFX(strings.NewReader(sample))
+	if err != nil || len(file.Trades) != 1 {
+		t.Fatalf("%v %+v", err, file)
+	}
+
+	trade := file.Trades[0]
+	if got := trade.Commission.Float(); got > -0.50 || got < -0.501 {
+		t.Errorf("commission = %v, want a rebate of about -0.5009 USD", got)
+	}
+	if got := trade.CashBase(); got < -37.05 || got > -37.04 {
+		t.Errorf("cash in base currency = %v, want the broker's TOTAL of -37.046", got)
+	}
+}
